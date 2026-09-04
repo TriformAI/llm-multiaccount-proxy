@@ -146,6 +146,7 @@
       try {
         const session = await api('/session'); csrf = session.csrf_token;
         const authMode = document.getElementById('auth-mode'); authMode.value = session.auth_mode; authMode.title = session.auth_mode_locked ? 'Locked by environment configuration' : 'Configured in llmap.toml';
+        document.getElementById('session-count').textContent = session.sticky_sessions;
         const accounts = await api('/accounts');
         list.innerHTML = accounts.length ? accounts.map(card).join('') : '<div class="empty">No accounts yet. Add one to open the routing pool.</div>';
         document.getElementById('active-count').textContent = accounts.filter(a=>a.enabled).length;

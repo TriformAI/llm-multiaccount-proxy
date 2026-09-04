@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use thiserror::Error;
 
 use crate::auth::{AccountCredential, Authenticator, CredentialSnapshot};
-use crate::data_plane::{AccountRepository, RepositoryError};
+use crate::data_plane::{AccountRepository, ProxyAuditRecord, RepositoryError};
 use crate::egress::ProxyEndpoint;
 use crate::providers::ProviderAccount;
 use crate::routing::RouteAccount;
@@ -378,6 +378,28 @@ impl AccountRepository for SqliteStore {
         SqliteStore::load_account(self, account_id).map_err(|error| match error {
             StorageError::NotFound => RepositoryError::NotFound,
             StorageError::Database(_) => RepositoryError::Unavailable,
+            StorageError::Secret(_) | StorageError::InvalidAccount(_) => {
+                RepositoryError::InvalidData
+            }
+        })
+    }
+
+    async fn append_proxy_audit(&self, record: ProxyAuditRecord) -> Result<(), RepositoryError> {
+        self.append_audit(&AuditEvent {
+            occurred_at: record.occurred_at,
+            actor: record.actor,
+            action: "proxy.request".into(),
+            account_id: record.account_id,
+            provider: record.provider,
+            model: record.model,
+            session_id: record.session_fingerprint,
+            status: Some(record.status),
+            outcome: record.outcome,
+            latency_ms: Some(record.latency_ms),
+        })
+        .map_err(|error| match error {
+            StorageError::Database(_) => RepositoryError::Unavailable,
+            StorageError::NotFound => RepositoryError::NotFound,
             StorageError::Secret(_) | StorageError::InvalidAccount(_) => {
                 RepositoryError::InvalidData
             }

@@ -167,4 +167,12 @@ impl Authenticator {
         mac.update(token.as_bytes());
         mac.finalize().into_bytes().into()
     }
+
+    pub fn metadata_fingerprint(&self, value: &str) -> String {
+        let digest = self.digest(value);
+        digest[..12]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
 }

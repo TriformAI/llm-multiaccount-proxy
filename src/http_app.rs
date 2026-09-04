@@ -37,6 +37,7 @@ pub fn router(data_plane: Arc<DataPlane>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
+        .route("/metrics", get(metrics))
         .route("/v1", any(proxy_root))
         .route("/v1/{*path}", any(proxy_v1))
         .route("/session/{session_id}/v1", any(proxy_session_root))
@@ -86,6 +87,28 @@ async fn health() -> impl IntoResponse {
 
 async fn ready() -> impl IntoResponse {
     Json(json!({"status": "ready"}))
+}
+
+async fn metrics(State(state): State<Arc<DataPlane>>) -> Response {
+    let metrics = state.metrics();
+    let body = format!(
+        "# TYPE llmap_requests_total counter\nllmap_requests_total {}\n\
+         # TYPE llmap_authentication_failures_total counter\nllmap_authentication_failures_total {}\n\
+         # TYPE llmap_upstream_failures_total counter\nllmap_upstream_failures_total {}\n\
+         # TYPE llmap_responses_total counter\nllmap_responses_total {}\n",
+        metrics.requests_total,
+        metrics.authentication_failures_total,
+        metrics.upstream_failures_total,
+        metrics.responses_total,
+    );
+    (
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        body,
+    )
+        .into_response()
 }
 
 async fn admin_redirect() -> Redirect {
@@ -184,6 +207,7 @@ async fn admin_session_api(State(state): State<AdminState>, headers: HeaderMap) 
         "auth_mode": state.runtime.auth_mode,
         "auth_mode_locked": state.runtime.auth_mode_locked,
         "active_sessions": state.sessions.active_session_count(Utc::now()),
+        "sticky_sessions": state.data_plane.sticky_session_count().await,
     }))
     .into_response()
 }

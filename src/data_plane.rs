@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use axum::body::Body;
@@ -32,6 +33,19 @@ pub enum RepositoryError {
     InvalidData,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProxyAuditRecord {
+    pub occurred_at: DateTime<Utc>,
+    pub actor: String,
+    pub account_id: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub session_fingerprint: Option<String>,
+    pub status: u16,
+    pub outcome: String,
+    pub latency_ms: u64,
+}
+
 #[async_trait]
 pub trait AccountRepository: Send + Sync {
     async fn credential_snapshot(
@@ -44,6 +58,26 @@ pub trait AccountRepository: Send + Sync {
         &self,
         account_id: &str,
     ) -> Result<(ProviderAccount, SecretInput), RepositoryError>;
+
+    async fn append_proxy_audit(&self, _record: ProxyAuditRecord) -> Result<(), RepositoryError> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct MetricsSnapshot {
+    pub requests_total: u64,
+    pub authentication_failures_total: u64,
+    pub upstream_failures_total: u64,
+    pub responses_total: u64,
+}
+
+#[derive(Default)]
+struct DataPlaneMetrics {
+    requests_total: AtomicU64,
+    authentication_failures_total: AtomicU64,
+    upstream_failures_total: AtomicU64,
+    responses_total: AtomicU64,
 }
 
 pub struct UpstreamRequest {
@@ -149,6 +183,7 @@ pub struct DataPlane {
     pub(crate) router: Mutex<Router>,
     pub(crate) transport: Arc<dyn UpstreamTransport>,
     pub(crate) max_request_bytes: usize,
+    metrics: DataPlaneMetrics,
 }
 
 impl DataPlane {
@@ -167,10 +202,13 @@ impl DataPlane {
             router: Mutex::new(router),
             transport,
             max_request_bytes,
+            metrics: DataPlaneMetrics::default(),
         }
     }
 
     pub async fn handle(&self, _request: ProxyRequest) -> Result<ProxyResponse, DataPlaneError> {
+        self.metrics.requests_total.fetch_add(1, Ordering::Relaxed);
+        let started = std::time::Instant::now();
         let request = _request;
         if request.body.len() > self.max_request_bytes {
             return Err(DataPlaneError::BadRequest(format!(
@@ -186,12 +224,40 @@ impl DataPlane {
             .credential_snapshot(&self.authenticator, now)
             .await
             .map_err(|_| DataPlaneError::CredentialStoreUnavailable)?;
-        self.authenticator
-            .authorize(self.auth_mode, presented_token.as_deref(), &snapshot, now)
-            .map_err(|error| match error {
-                AuthError::Unauthorized => DataPlaneError::Unauthorized,
-                AuthError::CredentialStoreUnavailable => DataPlaneError::CredentialStoreUnavailable,
-            })?;
+        let auth_decision = match self.authenticator.authorize(
+            self.auth_mode,
+            presented_token.as_deref(),
+            &snapshot,
+            now,
+        ) {
+            Ok(decision) => decision,
+            Err(error) => {
+                self.metrics
+                    .authentication_failures_total
+                    .fetch_add(1, Ordering::Relaxed);
+                let mapped = match error {
+                    AuthError::Unauthorized => DataPlaneError::Unauthorized,
+                    AuthError::CredentialStoreUnavailable => {
+                        DataPlaneError::CredentialStoreUnavailable
+                    }
+                };
+                let _ = self
+                    .repository
+                    .append_proxy_audit(ProxyAuditRecord {
+                        occurred_at: now,
+                        actor: "client:unmatched".into(),
+                        account_id: None,
+                        provider: None,
+                        model: None,
+                        session_fingerprint: None,
+                        status: mapped.status().as_u16(),
+                        outcome: "authentication_failed".into(),
+                        latency_ms: started.elapsed().as_millis() as u64,
+                    })
+                    .await;
+                return Err(mapped);
+            }
+        };
 
         let session_id = session_id(&request)?;
         let mut json = if request.body.is_empty() {
@@ -217,7 +283,7 @@ impl DataPlane {
             .await
             .choose(
                 &RouteRequest {
-                    session_id,
+                    session_id: session_id.clone(),
                     model: requested_model.clone(),
                 },
                 now,
@@ -254,7 +320,7 @@ impl DataPlane {
             request.body
         };
 
-        let upstream = self
+        let upstream = match self
             .transport
             .send(UpstreamRequest {
                 account_id: account.id.clone(),
@@ -265,7 +331,35 @@ impl DataPlane {
                 headers,
             })
             .await
-            .map_err(|_| DataPlaneError::UpstreamUnavailable)?;
+        {
+            Ok(upstream) => upstream,
+            Err(_) => {
+                self.metrics
+                    .upstream_failures_total
+                    .fetch_add(1, Ordering::Relaxed);
+                let _ = self
+                    .repository
+                    .append_proxy_audit(ProxyAuditRecord {
+                        occurred_at: now,
+                        actor: auth_decision
+                            .matched_account_id
+                            .as_deref()
+                            .map(|id| format!("client:{id}"))
+                            .unwrap_or_else(|| "client:anonymous".into()),
+                        account_id: Some(account.id.clone()),
+                        provider: Some(selection.provider.clone()),
+                        model: (!requested_model.is_empty()).then_some(requested_model.clone()),
+                        session_fingerprint: session_id
+                            .as_deref()
+                            .map(|session| self.authenticator.metadata_fingerprint(session)),
+                        status: StatusCode::BAD_GATEWAY.as_u16(),
+                        outcome: "transport_failure".into(),
+                        latency_ms: started.elapsed().as_millis() as u64,
+                    })
+                    .await;
+                return Err(DataPlaneError::UpstreamUnavailable);
+            }
+        };
 
         let outcome = classify_status(upstream.status, &upstream.headers, now);
         self.router
@@ -273,6 +367,35 @@ impl DataPlane {
             .await
             .record_outcome(&account.id, outcome)
             .map_err(|_| DataPlaneError::NoCapacity)?;
+
+        self.metrics.responses_total.fetch_add(1, Ordering::Relaxed);
+        let _ = self
+            .repository
+            .append_proxy_audit(ProxyAuditRecord {
+                occurred_at: now,
+                actor: auth_decision
+                    .matched_account_id
+                    .as_deref()
+                    .map(|id| format!("client:{id}"))
+                    .unwrap_or_else(|| "client:anonymous".into()),
+                account_id: Some(account.id.clone()),
+                provider: Some(selection.provider),
+                model: (!requested_model.is_empty()).then_some(requested_model),
+                session_fingerprint: session_id
+                    .as_deref()
+                    .map(|session| self.authenticator.metadata_fingerprint(session)),
+                status: upstream.status.as_u16(),
+                outcome: match outcome {
+                    UpstreamOutcome::Success => "success",
+                    UpstreamOutcome::Unauthorized => "upstream_unauthorized",
+                    UpstreamOutcome::RateLimited { .. } => "rate_limited",
+                    UpstreamOutcome::Overloaded { .. } => "overloaded",
+                    UpstreamOutcome::TransientFailure => "transient_failure",
+                }
+                .into(),
+                latency_ms: started.elapsed().as_millis() as u64,
+            })
+            .await;
 
         Ok(ProxyResponse {
             status: upstream.status,
@@ -283,6 +406,22 @@ impl DataPlane {
 
     pub async fn replace_route_accounts(&self, accounts: Vec<crate::routing::RouteAccount>) {
         self.router.lock().await.replace_accounts(accounts);
+    }
+
+    pub fn metrics(&self) -> MetricsSnapshot {
+        MetricsSnapshot {
+            requests_total: self.metrics.requests_total.load(Ordering::Relaxed),
+            authentication_failures_total: self
+                .metrics
+                .authentication_failures_total
+                .load(Ordering::Relaxed),
+            upstream_failures_total: self.metrics.upstream_failures_total.load(Ordering::Relaxed),
+            responses_total: self.metrics.responses_total.load(Ordering::Relaxed),
+        }
+    }
+
+    pub async fn sticky_session_count(&self) -> usize {
+        self.router.lock().await.session_count()
     }
 }
 
