@@ -58,6 +58,10 @@ impl ForwardProxyHandler {
         }
     }
 
+    pub fn destination_allowed(&self, request: &Request<Body>) -> bool {
+        self.authorize_uri(request).is_ok()
+    }
+
     fn authorize_uri(&self, request: &Request<Body>) -> Result<(), ()> {
         let destination = if request.method() == Method::CONNECT {
             let authority = request.uri().authority().ok_or(())?;

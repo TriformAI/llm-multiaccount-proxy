@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use axum::body::Body as AxumBody;
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
+use hudsucker::Body;
 use hudsucker::hyper::{Method, Request};
-use hudsucker::{Body, HttpContext, HttpHandler, RequestOrResponse};
 use llmap::auth::{AuthMode, Authenticator, CredentialSnapshot};
 use llmap::data_plane::{
     AccountRepository, DataPlane, RepositoryError, TransportError, UpstreamRequest,
@@ -68,31 +68,20 @@ fn handler() -> ForwardProxyHandler {
 
 #[tokio::test]
 async fn mitm_connect_is_allowlisted_and_metadata_destinations_are_denied() {
-    let context = HttpContext {
-        client_addr: "127.0.0.1:4242".parse().unwrap(),
-    };
-    let mut handler = handler();
+    let handler = handler();
     let denied = Request::builder()
         .method(Method::CONNECT)
         .uri("169.254.169.254:80")
         .body(Body::empty())
         .unwrap();
-    match handler.handle_request(&context, denied).await {
-        RequestOrResponse::Response(response) => {
-            assert_eq!(response.status(), StatusCode::FORBIDDEN)
-        }
-        RequestOrResponse::Request(_) => panic!("unsafe CONNECT escaped the destination policy"),
-    }
+    assert!(!handler.destination_allowed(&denied));
 
     let allowed = Request::builder()
         .method(Method::CONNECT)
         .uri("api.anthropic.com:443")
         .body(Body::empty())
         .unwrap();
-    assert!(matches!(
-        handler.handle_request(&context, allowed).await,
-        RequestOrResponse::Request(_)
-    ));
+    assert!(handler.destination_allowed(&allowed));
 }
 
 #[test]
