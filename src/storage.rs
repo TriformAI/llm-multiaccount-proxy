@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use crate::auth::{AccountCredential, Authenticator, CredentialSnapshot};
 use crate::data_plane::{AccountRepository, RepositoryError};
+use crate::egress::ProxyEndpoint;
 use crate::providers::ProviderAccount;
 use crate::secrets::{SecretBox, SecretError, SecretInput};
 
@@ -71,8 +72,25 @@ impl SqliteStore {
                  credential_ciphertext TEXT NOT NULL,
                  updated_at TEXT NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS audit_events (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 occurred_at TEXT NOT NULL,
+                 actor TEXT NOT NULL,
+                 action TEXT NOT NULL,
+                 account_id TEXT,
+                 provider TEXT,
+                 model TEXT,
+                 session_id TEXT,
+                 status INTEGER,
+                 outcome TEXT NOT NULL,
+                 latency_ms INTEGER
+             );
+             CREATE INDEX IF NOT EXISTS audit_events_occurred_at
+                 ON audit_events(occurred_at DESC);
              INSERT OR IGNORE INTO schema_migrations(version, applied_at)
-             VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));",
+             VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+             INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+             VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));",
         )?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -137,31 +155,143 @@ impl SqliteStore {
     }
 
     pub fn list_accounts(&self) -> Result<Vec<PublicAccount>, StorageError> {
-        unimplemented!("RED: redacted account listing")
+        let connection = self.connection.lock();
+        let mut statement = connection.prepare(
+            "SELECT account_json, credential_ciphertext
+             FROM provider_accounts ORDER BY id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.map(|row| {
+            let (json, ciphertext) = row?;
+            let account: ProviderAccount = serde_json::from_str(&json)
+                .map_err(|error| StorageError::InvalidAccount(error.to_string()))?;
+            let mut models: Vec<_> = account.model_map.keys().cloned().collect();
+            models.sort();
+            let egress = account
+                .egress_proxies
+                .iter()
+                .map(|endpoint| {
+                    ProxyEndpoint::parse(endpoint)
+                        .map(|parsed| parsed.redacted_authority())
+                        .unwrap_or_else(|_| "[invalid proxy endpoint]".into())
+                })
+                .collect();
+            Ok(PublicAccount {
+                id: account.id,
+                label: account.label,
+                provider: account.kind,
+                base_url: account.base_url.to_string(),
+                enabled: account.enabled,
+                models,
+                egress,
+                credential_present: !ciphertext.is_empty(),
+            })
+        })
+        .collect()
     }
 
-    pub fn set_account_enabled(
-        &self,
-        _account_id: &str,
-        _enabled: bool,
-    ) -> Result<(), StorageError> {
-        unimplemented!("RED: immediate account pause and resume")
+    pub fn set_account_enabled(&self, account_id: &str, enabled: bool) -> Result<(), StorageError> {
+        let (mut account, credential) = self.load_account(account_id)?;
+        account.enabled = enabled;
+        self.upsert_account(&account, &credential)
     }
 
-    pub fn delete_account(&self, _account_id: &str) -> Result<(), StorageError> {
-        unimplemented!("RED: immediate account revocation")
+    pub fn delete_account(&self, account_id: &str) -> Result<(), StorageError> {
+        let changed = self
+            .connection
+            .lock()
+            .execute("DELETE FROM provider_accounts WHERE id = ?1", [account_id])?;
+        if changed == 0 {
+            return Err(StorageError::NotFound);
+        }
+        Ok(())
     }
 
-    pub fn append_audit(&self, _event: &AuditEvent) -> Result<(), StorageError> {
-        unimplemented!("RED: metadata-only audit persistence")
+    pub fn append_audit(&self, event: &AuditEvent) -> Result<(), StorageError> {
+        self.connection.lock().execute(
+            "INSERT INTO audit_events (
+                 occurred_at, actor, action, account_id, provider, model,
+                 session_id, status, outcome, latency_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            rusqlite::params![
+                event.occurred_at.to_rfc3339(),
+                event.actor,
+                event.action,
+                event.account_id,
+                event.provider,
+                event.model,
+                event.session_id,
+                event.status,
+                event.outcome,
+                event.latency_ms,
+            ],
+        )?;
+        Ok(())
     }
 
-    pub fn recent_audit(&self, _limit: usize) -> Result<Vec<AuditEvent>, StorageError> {
-        unimplemented!("RED: audit history")
+    pub fn recent_audit(&self, limit: usize) -> Result<Vec<AuditEvent>, StorageError> {
+        let connection = self.connection.lock();
+        let mut statement = connection.prepare(
+            "SELECT occurred_at, actor, action, account_id, provider, model,
+                    session_id, status, outcome, latency_ms
+             FROM audit_events ORDER BY occurred_at DESC, id DESC LIMIT ?1",
+        )?;
+        let rows = statement.query_map([limit.clamp(1, 1_000) as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<u16>>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, Option<u64>>(9)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (
+                occurred_at,
+                actor,
+                action,
+                account_id,
+                provider,
+                model,
+                session_id,
+                status,
+                outcome,
+                latency_ms,
+            ) = row?;
+            let occurred_at = DateTime::parse_from_rfc3339(&occurred_at)
+                .map_err(|error| StorageError::InvalidAccount(error.to_string()))?
+                .with_timezone(&Utc);
+            Ok(AuditEvent {
+                occurred_at,
+                actor,
+                action,
+                account_id,
+                provider,
+                model,
+                session_id,
+                status,
+                outcome,
+                latency_ms,
+            })
+        })
+        .collect()
     }
 
-    pub fn prune_audit_before(&self, _cutoff: DateTime<Utc>) -> Result<usize, StorageError> {
-        unimplemented!("RED: bounded metadata retention")
+    pub fn prune_audit_before(&self, cutoff: DateTime<Utc>) -> Result<usize, StorageError> {
+        self.connection
+            .lock()
+            .execute(
+                "DELETE FROM audit_events WHERE occurred_at < ?1",
+                [cutoff.to_rfc3339()],
+            )
+            .map_err(StorageError::Database)
     }
 }
 

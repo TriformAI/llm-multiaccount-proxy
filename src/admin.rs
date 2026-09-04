@@ -235,7 +235,7 @@ pub fn login_page() -> &'static str {
 }
 
 pub fn dashboard_page() -> &'static str {
-    unimplemented!("RED: branded account and egress control plane")
+    include_str!("admin_dashboard.html")
 }
 
 fn random_token() -> SecretInput {
