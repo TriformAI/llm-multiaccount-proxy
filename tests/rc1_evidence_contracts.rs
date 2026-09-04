@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::Infallible;
+use std::fs;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -23,6 +24,18 @@ use url::Url;
 
 const CALLER_TOKEN: &str = "fake-rc1-caller-token";
 const PROMPT_SENTINEL: &str = "fake-sensitive-prompt-never-record";
+
+#[test]
+fn release_workflow_never_presents_a_prerelease_as_ga() {
+    let workflow = fs::read_to_string(format!(
+        "{}/.github/workflows/release.yml",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+
+    assert!(workflow.contains("prerelease: ${{ contains(github.ref_name, '-') }}"));
+    assert!(workflow.contains("make_latest: ${{ !contains(github.ref_name, '-') }}"));
+}
 
 struct EvidenceRepository {
     accounts: HashMap<String, (ProviderAccount, String)>,
