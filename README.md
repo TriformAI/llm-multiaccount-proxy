@@ -1,5 +1,7 @@
 # LLM Multiaccount Proxy
 
+[![Forgejo CI](https://forgejo.triform.dev/triform/llm-multiaccount-proxy/actions/workflows/ci.yml/badge.svg?branch=main)](https://forgejo.triform.dev/triform/llm-multiaccount-proxy/actions?workflow=ci.yml)
+
 LLM Multiaccount Proxy (`llmap`) gives teams one Anthropic-compatible endpoint
 for the Claude accounts and compatible providers they already control.
 
