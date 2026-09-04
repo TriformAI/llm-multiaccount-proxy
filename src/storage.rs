@@ -1,9 +1,13 @@
 use std::path::Path;
 
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use parking_lot::Mutex;
 use rusqlite::Connection;
 use thiserror::Error;
-use zeroize::Zeroizing;
 
+use crate::auth::{AccountCredential, Authenticator, CredentialSnapshot};
+use crate::data_plane::{AccountRepository, RepositoryError};
 use crate::providers::ProviderAccount;
 use crate::secrets::{SecretBox, SecretError, SecretInput};
 
@@ -20,7 +24,7 @@ pub enum StorageError {
 }
 
 pub struct SqliteStore {
-    connection: Connection,
+    connection: Mutex<Connection>,
     secret_box: SecretBox,
 }
 
@@ -45,7 +49,7 @@ impl SqliteStore {
              VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));",
         )?;
         Ok(Self {
-            connection,
+            connection: Mutex::new(connection),
             secret_box,
         })
     }
@@ -61,7 +65,7 @@ impl SqliteStore {
         let encrypted = self
             .secret_box
             .encrypt(credential, associated_data.as_bytes())?;
-        self.connection.execute(
+        self.connection.lock().execute(
             "INSERT INTO provider_accounts (
                  id, account_json, credential_ciphertext, updated_at
              ) VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -77,8 +81,8 @@ impl SqliteStore {
     pub fn load_account(
         &self,
         account_id: &str,
-    ) -> Result<(ProviderAccount, Zeroizing<String>), StorageError> {
-        let result = self.connection.query_row(
+    ) -> Result<(ProviderAccount, SecretInput), StorageError> {
+        let result = self.connection.lock().query_row(
             "SELECT account_json, credential_ciphertext
              FROM provider_accounts WHERE id = ?1",
             [account_id],
@@ -96,12 +100,74 @@ impl SqliteStore {
             &crate::secrets::EncryptedSecret::from_storage_value(ciphertext),
             associated_data.as_bytes(),
         )?;
-        Ok((account, secret))
+        Ok((account, SecretInput::new(secret.as_str())))
     }
 
     pub fn journal_mode(&self) -> Result<String, StorageError> {
         self.connection
+            .lock()
             .pragma_query_value(None, "journal_mode", |row| row.get(0))
             .map_err(StorageError::Database)
+    }
+}
+
+#[async_trait]
+impl AccountRepository for SqliteStore {
+    async fn credential_snapshot(
+        &self,
+        authenticator: &Authenticator,
+        _now: DateTime<Utc>,
+    ) -> Result<CredentialSnapshot, RepositoryError> {
+        let rows = {
+            let connection = self.connection.lock();
+            let mut statement = connection
+                .prepare(
+                    "SELECT account_json, credential_ciphertext
+                     FROM provider_accounts ORDER BY id",
+                )
+                .map_err(|_| RepositoryError::Unavailable)?;
+            let mapped = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(|_| RepositoryError::Unavailable)?;
+            mapped
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| RepositoryError::Unavailable)?
+        };
+
+        let mut credentials = Vec::with_capacity(rows.len());
+        for (account_json, ciphertext) in rows {
+            let account: ProviderAccount =
+                serde_json::from_str(&account_json).map_err(|_| RepositoryError::InvalidData)?;
+            let associated_data = format!("account:{}", account.id);
+            let secret = self
+                .secret_box
+                .decrypt(
+                    &crate::secrets::EncryptedSecret::from_storage_value(ciphertext),
+                    associated_data.as_bytes(),
+                )
+                .map_err(|_| RepositoryError::InvalidData)?;
+            let credential = AccountCredential::active(authenticator, &account.id, secret.as_str());
+            credentials.push(if account.enabled {
+                credential
+            } else {
+                credential.paused()
+            });
+        }
+        Ok(CredentialSnapshot::Available(credentials))
+    }
+
+    async fn load_account(
+        &self,
+        account_id: &str,
+    ) -> Result<(ProviderAccount, SecretInput), RepositoryError> {
+        SqliteStore::load_account(self, account_id).map_err(|error| match error {
+            StorageError::NotFound => RepositoryError::NotFound,
+            StorageError::Database(_) => RepositoryError::Unavailable,
+            StorageError::Secret(_) | StorageError::InvalidAccount(_) => {
+                RepositoryError::InvalidData
+            }
+        })
     }
 }

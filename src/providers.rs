@@ -56,8 +56,8 @@ impl PreparedProviderRequest {
             .map(|value| value.as_str())
     }
 
-    pub(crate) fn into_headers(self) -> BTreeMap<String, Zeroizing<String>> {
-        self.headers
+    pub(crate) fn into_parts(self) -> (Url, String, BTreeMap<String, Zeroizing<String>>) {
+        (self.url, self.upstream_model, self.headers)
     }
 }
 

@@ -63,7 +63,7 @@ fn sqlite_uses_wal_and_never_persists_plaintext_credentials() {
 
     assert_eq!(store.journal_mode().unwrap(), "wal");
     assert_eq!(loaded_account.label, "Primary");
-    assert_eq!(loaded_secret.as_str(), credential.expose());
+    assert_eq!(loaded_secret.expose(), credential.expose());
     let database_bytes = std::fs::read(database).unwrap();
     assert!(
         !database_bytes

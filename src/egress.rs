@@ -73,6 +73,10 @@ impl ProxyEndpoint {
             None => format!("{}://{host}", self.url.scheme()),
         }
     }
+
+    pub(crate) fn as_url(&self) -> &Url {
+        &self.url
+    }
 }
 
 #[derive(Clone, Debug)]
