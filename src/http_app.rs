@@ -188,7 +188,7 @@ async fn admin_login_api(
 async fn admin_logout_api(State(state): State<AdminState>, headers: HeaderMap) -> Response {
     let session = match authenticated_session(&state, &headers, true) {
         Ok(session) => session,
-        Err(response) => return response,
+        Err(rejection) => return rejection.into_response(),
     };
     state.sessions.logout(&session);
     let mut response = StatusCode::NO_CONTENT.into_response();
@@ -208,7 +208,7 @@ async fn admin_logout_api(State(state): State<AdminState>, headers: HeaderMap) -
 async fn admin_session_api(State(state): State<AdminState>, headers: HeaderMap) -> Response {
     let session = match authenticated_session(&state, &headers, false) {
         Ok(session) => session,
-        Err(response) => return response,
+        Err(rejection) => return rejection.into_response(),
     };
     let csrf = match state.sessions.issue_csrf(&session, Utc::now()) {
         Ok(csrf) => csrf,
@@ -225,8 +225,8 @@ async fn admin_session_api(State(state): State<AdminState>, headers: HeaderMap) 
 }
 
 async fn admin_accounts_api(State(state): State<AdminState>, headers: HeaderMap) -> Response {
-    if let Err(response) = authenticated_session(&state, &headers, false) {
-        return response;
+    if let Err(rejection) = authenticated_session(&state, &headers, false) {
+        return rejection.into_response();
     }
     match state.store.list_accounts() {
         Ok(accounts) => Json(accounts).into_response(),
@@ -255,8 +255,8 @@ async fn admin_create_account_api(
     headers: HeaderMap,
     Json(input): Json<AccountInput>,
 ) -> Response {
-    if let Err(response) = authenticated_session(&state, &headers, true) {
-        return response;
+    if let Err(rejection) = authenticated_session(&state, &headers, true) {
+        return rejection.into_response();
     }
     if let Err(message) = validate_account_input(&input) {
         return api_error(
@@ -329,8 +329,8 @@ async fn admin_rotate_account_credential_api(
     headers: HeaderMap,
     Json(input): Json<CredentialInput>,
 ) -> Response {
-    if let Err(response) = authenticated_session(&state, &headers, true) {
-        return response;
+    if let Err(rejection) = authenticated_session(&state, &headers, true) {
+        return rejection.into_response();
     }
     if input.credential.is_empty() || input.credential.len() > 32 * 1024 {
         return api_error(
@@ -381,8 +381,8 @@ async fn admin_set_account_enabled_api(
     headers: HeaderMap,
     Json(input): Json<EnabledInput>,
 ) -> Response {
-    if let Err(response) = authenticated_session(&state, &headers, true) {
-        return response;
+    if let Err(rejection) = authenticated_session(&state, &headers, true) {
+        return rejection.into_response();
     }
     if let Err(error) = state.store.set_account_enabled(&account_id, input.enabled) {
         return storage_error(error);
@@ -414,8 +414,8 @@ async fn admin_delete_account_api(
     Path(account_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = authenticated_session(&state, &headers, true) {
-        return response;
+    if let Err(rejection) = authenticated_session(&state, &headers, true) {
+        return rejection.into_response();
     }
     if let Err(error) = state.store.delete_account(&account_id) {
         return storage_error(error);
@@ -439,8 +439,8 @@ async fn admin_delete_account_api(
 }
 
 async fn admin_audit_api(State(state): State<AdminState>, headers: HeaderMap) -> Response {
-    if let Err(response) = authenticated_session(&state, &headers, false) {
-        return response;
+    if let Err(rejection) = authenticated_session(&state, &headers, false) {
+        return rejection.into_response();
     }
     match state.store.recent_audit(200) {
         Ok(events) => Json(events).into_response(),
@@ -448,13 +448,32 @@ async fn admin_audit_api(State(state): State<AdminState>, headers: HeaderMap) ->
     }
 }
 
+enum AdminSessionRejection {
+    Unauthorized,
+    InvalidCsrf,
+}
+
+impl IntoResponse for AdminSessionRejection {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Unauthorized => unauthorized_admin(),
+            Self::InvalidCsrf => api_error(
+                StatusCode::FORBIDDEN,
+                "invalid_csrf",
+                "The administrator request did not include the current CSRF token.",
+                "Reload the control plane and retry the operation.",
+            ),
+        }
+    }
+}
+
 fn authenticated_session(
     state: &AdminState,
     headers: &HeaderMap,
     require_csrf: bool,
-) -> Result<String, Response> {
-    let session =
-        cookie_value(headers, crate::admin::ADMIN_SESSION_COOKIE).ok_or_else(unauthorized_admin)?;
+) -> Result<String, AdminSessionRejection> {
+    let session = cookie_value(headers, crate::admin::ADMIN_SESSION_COOKIE)
+        .ok_or(AdminSessionRejection::Unauthorized)?;
     let csrf = headers
         .get("x-llmap-csrf")
         .and_then(|value| value.to_str().ok());
@@ -462,13 +481,8 @@ fn authenticated_session(
         .sessions
         .authenticate(&session, csrf, require_csrf, Utc::now())
         .map_err(|error| match error {
-            AdminAuthError::InvalidCsrf => api_error(
-                StatusCode::FORBIDDEN,
-                "invalid_csrf",
-                "The administrator request did not include the current CSRF token.",
-                "Reload the control plane and retry the operation.",
-            ),
-            _ => unauthorized_admin(),
+            AdminAuthError::InvalidCsrf => AdminSessionRejection::InvalidCsrf,
+            _ => AdminSessionRejection::Unauthorized,
         })?;
     Ok(session)
 }
