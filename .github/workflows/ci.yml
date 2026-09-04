@@ -19,15 +19,6 @@ jobs:
           toolchain: 1.88.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Refresh security-pinned lockfile
-        if: github.event_name == 'workflow_dispatch'
-        run: cargo update -p time --precise 0.3.47
-      - name: Export refreshed lockfile
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
-        with:
-          name: security-lockfile
-          path: Cargo.lock
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-features
