@@ -91,3 +91,5 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: llmap-container.spdx.json
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
