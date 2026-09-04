@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TriformAI/llm-multiaccount-proxy/schema/llmap.schema.json",
+  "title": "LLM Multiaccount Proxy configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["server", "auth", "storage", "admin"],
+  "properties": {
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bind"],
+      "properties": {
+        "bind": {"type": "string", "description": "IP socket address"},
+        "max_request_bytes": {"type": "integer", "minimum": 1, "maximum": 268435456, "default": 33554432},
+        "allowed_upstream_hosts": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+      }
+    },
+    "forward_proxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean", "default": false},
+        "bind": {"type": "string", "default": "127.0.0.1:8081"},
+        "ca_cert_path": {"type": "string", "minLength": 1},
+        "ca_key_path": {"type": "string", "minLength": 1},
+        "allowed_hosts": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {"mode": {"enum": ["off", "observe", "enforce"]}}
+    },
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["database_path", "master_key_env"],
+      "properties": {
+        "database_path": {"type": "string", "minLength": 1},
+        "master_key_env": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$"}
+      }
+    },
+    "admin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["username", "bootstrap_password_env"],
+      "properties": {
+        "username": {"type": "string", "minLength": 1},
+        "bootstrap_password_env": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$"},
+        "secure_cookies": {"type": "boolean", "default": true}
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "audit_retention_days": {"type": "integer", "minimum": 1, "maximum": 365, "default": 30}
+      }
+    }
+  }
+}

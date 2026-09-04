@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Sign in · LLM Multiaccount Proxy</title>
+  <style>
+    :root {
+      --ink: #07080c;
+      --panel: #101219;
+      --panel-raised: #171a24;
+      --line: #2a2e3d;
+      --text: #f7f5ef;
+      --muted: #9b9eaa;
+      --signal: #7c86ff;
+      --signal-soft: rgba(124, 134, 255, .16);
+      --action: #f5d96e;
+      --danger: #ff7f86;
+    }
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 18% 18%, rgba(124,134,255,.18), transparent 32rem),
+        linear-gradient(135deg, #07080c 0%, #0d0f16 55%, #08090d 100%);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      display: grid;
+      place-items: center;
+      padding: 2rem;
+    }
+    .shell {
+      width: min(66rem, 100%);
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(19rem, .85fr);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 1.5rem;
+      background: rgba(16,18,25,.88);
+      box-shadow: 0 2.5rem 7rem rgba(0,0,0,.48);
+      backdrop-filter: blur(18px);
+    }
+    .story { padding: clamp(2.2rem, 6vw, 5rem); position: relative; }
+    .mark { display: flex; align-items: center; gap: .8rem; color: var(--muted); font-size: .82rem; letter-spacing: .12em; text-transform: uppercase; }
+    .mark-shape { width: 2rem; height: 2rem; transform: rotate(45deg); border: .45rem solid var(--signal); border-right-color: var(--action); border-radius: .35rem; }
+    h1 { max-width: 10ch; margin: 5rem 0 1.2rem; font-family: Georgia, "Times New Roman", serif; font-weight: 500; font-size: clamp(3rem, 7vw, 5.8rem); line-height: .92; letter-spacing: -.055em; }
+    .story p { max-width: 33rem; color: var(--muted); font-size: 1.05rem; line-height: 1.7; }
+    .route { margin-top: 3rem; display: grid; gap: .7rem; }
+    .route-line { display: grid; grid-template-columns: 5.5rem 1fr auto; gap: 1rem; align-items: center; font: .72rem ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+    .track { height: 2px; background: var(--line); position: relative; overflow: hidden; }
+    .track::after { content: ""; position: absolute; inset: 0; width: 38%; background: var(--signal); animation: route 2.7s ease-in-out infinite alternate; }
+    .route-line:nth-child(2) .track::after { width: 66%; animation-delay: -.8s; background: var(--action); }
+    .route-line:nth-child(3) .track::after { width: 24%; animation-delay: -1.6s; }
+    @keyframes route { to { transform: translateX(165%); } }
+    .login { padding: clamp(2rem, 5vw, 4rem); background: var(--panel-raised); display: flex; flex-direction: column; justify-content: center; border-left: 1px solid var(--line); }
+    .eyebrow { color: var(--signal); font-size: .74rem; font-weight: 750; letter-spacing: .14em; text-transform: uppercase; }
+    h2 { margin: .8rem 0 .5rem; font-size: 1.8rem; }
+    .hint { margin: 0 0 2rem; color: var(--muted); line-height: 1.55; }
+    label { display: block; margin: 1rem 0 .45rem; color: var(--muted); font-size: .82rem; }
+    input { width: 100%; min-height: 3.2rem; padding: .8rem 1rem; color: var(--text); background: var(--ink); border: 1px solid var(--line); border-radius: .7rem; outline: none; font: inherit; }
+    input:focus { border-color: var(--signal); box-shadow: 0 0 0 3px var(--signal-soft); }
+    button { width: 100%; min-height: 3.2rem; margin-top: 1.4rem; border: 0; border-radius: .7rem; color: #15140d; background: var(--action); font: 750 .95rem inherit; cursor: pointer; }
+    button:hover { filter: brightness(1.05); transform: translateY(-1px); }
+    button:disabled { opacity: .65; cursor: wait; }
+    #error { min-height: 1.4rem; margin-top: 1rem; color: var(--danger); font-size: .82rem; }
+    .privacy { margin-top: 2rem; color: var(--muted); font-size: .72rem; line-height: 1.5; }
+    @media (max-width: 760px) {
+      body { padding: 0; place-items: stretch; }
+      .shell { min-height: 100vh; border: 0; border-radius: 0; grid-template-columns: 1fr; }
+      .story { padding: 2rem; }
+      h1 { margin-top: 3rem; font-size: clamp(3rem, 16vw, 5rem); }
+      .route { display: none; }
+      .login { border-left: 0; border-top: 1px solid var(--line); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="story" aria-labelledby="product-title">
+      <div class="mark"><span class="mark-shape" aria-hidden="true"></span> Triform open infrastructure</div>
+      <h1 id="product-title">LLM Multiaccount Proxy</h1>
+      <p>One endpoint. Every account you control. Sticky sessions, explicit egress, and the routing truth in one calm control surface.</p>
+      <div class="route" aria-hidden="true">
+        <div class="route-line"><span>SESSION 08</span><span class="track"></span><span>CLAUDE A</span></div>
+        <div class="route-line"><span>SESSION 19</span><span class="track"></span><span>BEDROCK</span></div>
+        <div class="route-line"><span>SESSION 31</span><span class="track"></span><span>CLAUDE B</span></div>
+      </div>
+    </section>
+    <section class="login" aria-labelledby="login-title">
+      <span class="eyebrow">Administrator access</span>
+      <h2 id="login-title">Welcome back.</h2>
+      <p class="hint">Sign in to manage accounts, egress routes, and service health.</p>
+      <form id="login-form">
+        <label for="username">Username</label>
+        <input id="username" name="username" autocomplete="username" required autofocus>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button id="submit" type="submit">Open control plane</button>
+        <div id="error" role="alert" aria-live="polite"></div>
+      </form>
+      <p class="privacy">Credentials stay in this session and are never written to browser storage.</p>
+    </section>
+  </main>
+  <script>
+    const form = document.getElementById('login-form');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = document.getElementById('submit');
+      const error = document.getElementById('error');
+      button.disabled = true;
+      error.textContent = '';
+      try {
+        const response = await fetch('/admin/api/v1/login', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {'content-type': 'application/json'},
+          body: JSON.stringify({
+            username: document.getElementById('username').value,
+            password: document.getElementById('password').value
+          })
+        });
+        if (!response.ok) throw new Error('Sign-in failed. Check your credentials and try again.');
+        location.assign('/admin/');
+      } catch (reason) {
+        error.textContent = reason.message;
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
