@@ -19,7 +19,10 @@ use zeroize::Zeroizing;
 
 use crate::auth::{AuthError, Authenticator, CredentialSnapshot};
 use crate::egress::{DestinationPolicy, ProxyChain, ProxyEndpoint};
-use crate::providers::{ProviderAccount, ProviderKind, finalize_request_auth, prepare_request};
+use crate::providers::{
+    ProviderAccount, ProviderKind, finalize_request_auth, prepare_request_for_stream,
+    translate_bedrock_eventstream,
+};
 use crate::routing::{RouteRequest, Router, UpstreamOutcome};
 use crate::secrets::SecretInput;
 
@@ -271,6 +274,11 @@ impl DataPlane {
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_owned();
+        let stream_requested = json
+            .as_ref()
+            .and_then(|value| value.get("stream"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         if request.path_and_query.starts_with("/v1/messages") && requested_model.is_empty() {
             return Err(DataPlaneError::BadRequest(
                 "messages requests require a JSON model field".into(),
@@ -299,11 +307,12 @@ impl DataPlane {
                     DataPlaneError::NoCapacity
                 }
             })?;
-        let mut prepared = prepare_request(
+        let mut prepared = prepare_request_for_stream(
             &account,
             &credential,
             &request.path_and_query,
             &requested_model,
+            stream_requested,
         )
         .map_err(|_| DataPlaneError::UpstreamUnavailable)?;
         let upstream_model = prepared.upstream_model.clone();
@@ -313,15 +322,6 @@ impl DataPlane {
                 ProviderKind::BedrockApiKey | ProviderKind::BedrockSigV4
             ) && request.path_and_query.split('?').next() == Some("/v1/messages")
             {
-                if value
-                    .get("stream")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false)
-                {
-                    return Err(DataPlaneError::BadRequest(
-                        "native Bedrock streaming is not enabled in this release candidate".into(),
-                    ));
-                }
                 let object = value.as_object_mut().ok_or_else(|| {
                     DataPlaneError::BadRequest("messages body must be a JSON object".into())
                 })?;
@@ -352,7 +352,7 @@ impl DataPlane {
         let (url, _upstream_model, mut headers) = prepared.into_parts();
         copy_safe_request_headers(&request.headers, &mut headers)?;
 
-        let upstream = match self
+        let mut upstream = match self
             .transport
             .send(UpstreamRequest {
                 account_id: account.id.clone(),
@@ -392,6 +392,21 @@ impl DataPlane {
                 return Err(DataPlaneError::UpstreamUnavailable);
             }
         };
+
+        if stream_requested
+            && matches!(
+                account.kind,
+                ProviderKind::BedrockApiKey | ProviderKind::BedrockSigV4
+            )
+            && upstream.status.is_success()
+        {
+            upstream.headers.remove("content-length");
+            upstream.headers.insert(
+                "content-type",
+                HeaderValue::from_static("text/event-stream; charset=utf-8"),
+            );
+            upstream.body = translate_bedrock_eventstream(upstream.body);
+        }
 
         let outcome = classify_status(upstream.status, &upstream.headers, now);
         self.router

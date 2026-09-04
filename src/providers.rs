@@ -1,7 +1,11 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use axum::body::Body;
 use axum::http::Method;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+use bytes::{Bytes, BytesMut};
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -48,6 +52,8 @@ pub enum ProviderError {
     AwsSigningRequired,
     #[error("Bedrock SigV4 credential envelope is invalid")]
     InvalidAwsCredential,
+    #[error("Bedrock event stream frame is invalid")]
+    InvalidBedrockFrame,
 }
 
 pub struct PreparedProviderRequest {
@@ -85,6 +91,16 @@ pub fn prepare_request(
     path_and_query: &str,
     requested_model: &str,
 ) -> Result<PreparedProviderRequest, ProviderError> {
+    prepare_request_for_stream(account, credential, path_and_query, requested_model, false)
+}
+
+pub fn prepare_request_for_stream(
+    account: &ProviderAccount,
+    credential: &SecretInput,
+    path_and_query: &str,
+    requested_model: &str,
+    stream: bool,
+) -> Result<PreparedProviderRequest, ProviderError> {
     if !path_and_query.starts_with('/') || path_and_query.starts_with("//") {
         return Err(ProviderError::InvalidPath);
     }
@@ -101,7 +117,7 @@ pub fn prepare_request(
         .next()
         .is_some_and(|path| path == "/v1/messages")
     {
-        bedrock_invoke_url(&account.base_url, &upstream_model)?
+        bedrock_invoke_url(&account.base_url, &upstream_model, stream)?
     } else {
         account
             .base_url
@@ -158,6 +174,111 @@ pub fn prepare_request(
         upstream_model,
         headers,
     })
+}
+
+pub fn decode_bedrock_frame(frame: &[u8]) -> Result<Bytes, ProviderError> {
+    if frame.len() < 16 {
+        return Err(ProviderError::InvalidBedrockFrame);
+    }
+    let total_length = u32::from_be_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| ProviderError::InvalidBedrockFrame)?,
+    ) as usize;
+    let headers_length = u32::from_be_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| ProviderError::InvalidBedrockFrame)?,
+    ) as usize;
+    if total_length != frame.len()
+        || total_length > 16 * 1024 * 1024
+        || headers_length > total_length.saturating_sub(16)
+    {
+        return Err(ProviderError::InvalidBedrockFrame);
+    }
+    let expected_prelude = u32::from_be_bytes(
+        frame[8..12]
+            .try_into()
+            .map_err(|_| ProviderError::InvalidBedrockFrame)?,
+    );
+    let expected_message = u32::from_be_bytes(
+        frame[total_length - 4..]
+            .try_into()
+            .map_err(|_| ProviderError::InvalidBedrockFrame)?,
+    );
+    if crc32fast::hash(&frame[..8]) != expected_prelude
+        || crc32fast::hash(&frame[..total_length - 4]) != expected_message
+    {
+        return Err(ProviderError::InvalidBedrockFrame);
+    }
+    let payload_start = 12 + headers_length;
+    let payload = &frame[payload_start..total_length - 4];
+    let envelope: serde_json::Value =
+        serde_json::from_slice(payload).map_err(|_| ProviderError::InvalidBedrockFrame)?;
+    let encoded = envelope
+        .get("bytes")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(ProviderError::InvalidBedrockFrame)?;
+    let decoded = STANDARD
+        .decode(encoded)
+        .map_err(|_| ProviderError::InvalidBedrockFrame)?;
+    let event: serde_json::Value =
+        serde_json::from_slice(&decoded).map_err(|_| ProviderError::InvalidBedrockFrame)?;
+    let event_type = event
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(ProviderError::InvalidBedrockFrame)?;
+    Ok(Bytes::from(format!(
+        "event: {event_type}\ndata: {}\n\n",
+        String::from_utf8_lossy(&decoded)
+    )))
+}
+
+pub fn translate_bedrock_eventstream(body: Body) -> Body {
+    let output = async_stream::try_stream! {
+        use futures_util::StreamExt;
+
+        let mut input = body.into_data_stream();
+        let mut buffer = BytesMut::new();
+        loop {
+            while buffer.len() >= 4 {
+                let total_length = u32::from_be_bytes(
+                    buffer[..4]
+                        .try_into()
+                        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid Bedrock frame"))?,
+                ) as usize;
+                if !(16..=16 * 1024 * 1024).contains(&total_length) {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "invalid Bedrock event-stream frame length",
+                    ))?;
+                }
+                if buffer.len() < total_length {
+                    break;
+                }
+                let frame = buffer.split_to(total_length).freeze();
+                let sse = decode_bedrock_frame(&frame).map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "invalid Bedrock event-stream frame",
+                    )
+                })?;
+                yield sse;
+            }
+            match input.next().await {
+                Some(Ok(chunk)) => buffer.extend_from_slice(&chunk),
+                Some(Err(error)) => Err(std::io::Error::other(error.to_string()))?,
+                None => break,
+            }
+        }
+        if !buffer.is_empty() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "truncated Bedrock event stream",
+            ))?;
+        }
+    };
+    Body::from_stream(output)
 }
 
 pub fn finalize_request_auth(
@@ -288,7 +409,7 @@ impl AwsCredentialEnvelope {
     }
 }
 
-fn bedrock_invoke_url(base: &Url, model: &str) -> Result<Url, ProviderError> {
+fn bedrock_invoke_url(base: &Url, model: &str, stream: bool) -> Result<Url, ProviderError> {
     if model.is_empty() {
         return Err(ProviderError::InvalidPath);
     }
@@ -300,7 +421,11 @@ fn bedrock_invoke_url(base: &Url, model: &str) -> Result<Url, ProviderError> {
         .clear()
         .push("model")
         .push(model)
-        .push("invoke");
+        .push(if stream {
+            "invoke-with-response-stream"
+        } else {
+            "invoke"
+        });
     Ok(url)
 }
 
