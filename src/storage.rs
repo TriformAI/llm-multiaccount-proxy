@@ -807,9 +807,11 @@ impl AccountRepository for SqliteStore {
         SqliteStore::load_account(self, account_id).map_err(|error| match error {
             StorageError::NotFound => RepositoryError::NotFound,
             StorageError::Database(_) => RepositoryError::Unavailable,
-            StorageError::Secret(_) | StorageError::InvalidAccount(_) => {
-                RepositoryError::InvalidData
-            }
+            StorageError::Secret(_)
+            | StorageError::InvalidAccount(_)
+            | StorageError::BackupDestinationExists
+            | StorageError::BackupFilesystem(_)
+            | StorageError::InvalidBackup => RepositoryError::InvalidData,
         })
     }
 
@@ -829,9 +831,11 @@ impl AccountRepository for SqliteStore {
         .map_err(|error| match error {
             StorageError::Database(_) => RepositoryError::Unavailable,
             StorageError::NotFound => RepositoryError::NotFound,
-            StorageError::Secret(_) | StorageError::InvalidAccount(_) => {
-                RepositoryError::InvalidData
-            }
+            StorageError::Secret(_)
+            | StorageError::InvalidAccount(_)
+            | StorageError::BackupDestinationExists
+            | StorageError::BackupFilesystem(_)
+            | StorageError::InvalidBackup => RepositoryError::InvalidData,
         })
     }
 }
