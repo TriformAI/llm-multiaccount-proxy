@@ -234,6 +234,10 @@ pub fn login_page() -> &'static str {
     include_str!("admin_login.html")
 }
 
+pub fn dashboard_page() -> &'static str {
+    unimplemented!("RED: branded account and egress control plane")
+}
+
 fn random_token() -> SecretInput {
     let mut bytes = [0_u8; 32];
     OsRng.fill_bytes(&mut bytes);

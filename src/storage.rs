@@ -11,6 +11,32 @@ use crate::data_plane::{AccountRepository, RepositoryError};
 use crate::providers::ProviderAccount;
 use crate::secrets::{SecretBox, SecretError, SecretInput};
 
+#[derive(Clone, Debug, serde::Serialize, Eq, PartialEq)]
+pub struct PublicAccount {
+    pub id: String,
+    pub label: String,
+    pub provider: crate::providers::ProviderKind,
+    pub base_url: String,
+    pub enabled: bool,
+    pub models: Vec<String>,
+    pub egress: Vec<String>,
+    pub credential_present: bool,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, Eq, PartialEq)]
+pub struct AuditEvent {
+    pub occurred_at: DateTime<Utc>,
+    pub actor: String,
+    pub action: String,
+    pub account_id: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub session_id: Option<String>,
+    pub status: Option<u16>,
+    pub outcome: String,
+    pub latency_ms: Option<u64>,
+}
+
 #[derive(Debug, Error)]
 pub enum StorageError {
     #[error("database operation failed: {0}")]
@@ -108,6 +134,34 @@ impl SqliteStore {
             .lock()
             .pragma_query_value(None, "journal_mode", |row| row.get(0))
             .map_err(StorageError::Database)
+    }
+
+    pub fn list_accounts(&self) -> Result<Vec<PublicAccount>, StorageError> {
+        unimplemented!("RED: redacted account listing")
+    }
+
+    pub fn set_account_enabled(
+        &self,
+        _account_id: &str,
+        _enabled: bool,
+    ) -> Result<(), StorageError> {
+        unimplemented!("RED: immediate account pause and resume")
+    }
+
+    pub fn delete_account(&self, _account_id: &str) -> Result<(), StorageError> {
+        unimplemented!("RED: immediate account revocation")
+    }
+
+    pub fn append_audit(&self, _event: &AuditEvent) -> Result<(), StorageError> {
+        unimplemented!("RED: metadata-only audit persistence")
+    }
+
+    pub fn recent_audit(&self, _limit: usize) -> Result<Vec<AuditEvent>, StorageError> {
+        unimplemented!("RED: audit history")
+    }
+
+    pub fn prune_audit_before(&self, _cutoff: DateTime<Utc>) -> Result<usize, StorageError> {
+        unimplemented!("RED: bounded metadata retention")
     }
 }
 
