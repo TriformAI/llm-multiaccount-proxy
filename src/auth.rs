@@ -46,7 +46,7 @@ impl AccountCredential {
     }
 
     pub fn with_previous(
-        self,
+        mut self,
         authenticator: &Authenticator,
         token: &str,
         expires_at: DateTime<Utc>,
