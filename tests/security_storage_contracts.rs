@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use llmap::providers::{ProviderAccount, ProviderError, ProviderKind, prepare_request};
 use llmap::secrets::{AdminPasswordHash, SecretBox, SecretInput};
-use llmap::storage::SqliteStore;
+use llmap::storage::{AuditEvent, SqliteStore};
 use url::Url;
 
 fn account(kind: ProviderKind) -> ProviderAccount {
@@ -70,6 +70,71 @@ fn sqlite_uses_wal_and_never_persists_plaintext_credentials() {
             .windows(credential.expose().len())
             .any(|window| window == credential.expose().as_bytes())
     );
+}
+
+#[test]
+fn sqlite_backup_restores_with_the_external_key_and_contains_no_plaintext_secrets() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("llmap.db");
+    let backup = directory.path().join("llmap.backup.db");
+    let mut stored_account = account(ProviderKind::AnthropicApiKey);
+    stored_account.egress_proxies =
+        vec!["socks5h://fake-restore-user:fake-restore-pass@residential.invalid:1080".into()];
+    let credential = SecretInput::new("fake-restore-provider-token");
+    let store = SqliteStore::open(&database, SecretBox::new([41; 32])).unwrap();
+    store.upsert_account(&stored_account, &credential).unwrap();
+    store
+        .append_audit(&AuditEvent {
+            occurred_at: chrono::Utc::now(),
+            actor: "client:restore-fixture".into(),
+            action: "proxy_request".into(),
+            account_id: Some("account-01".into()),
+            provider: Some("anthropic_api_key".into()),
+            model: Some("claude-default".into()),
+            session_id: Some("sha256:fixture".into()),
+            status: Some(200),
+            outcome: "success".into(),
+            latency_ms: Some(12),
+        })
+        .unwrap();
+
+    store.backup_to(&backup).unwrap();
+    assert!(store.backup_to(&backup).is_err());
+    drop(store);
+
+    let backup_bytes = std::fs::read(&backup).unwrap();
+    for secret in [
+        credential.expose(),
+        "fake-restore-user",
+        "fake-restore-pass",
+        "fake-sensitive-prompt-never-persist",
+    ] {
+        assert!(
+            !backup_bytes
+                .windows(secret.len())
+                .any(|window| window == secret.as_bytes()),
+            "backup contained a plaintext secret sentinel"
+        );
+    }
+
+    let restored = SqliteStore::open(&backup, SecretBox::new([41; 32])).unwrap();
+    let inventory = restored.list_accounts().unwrap();
+    assert_eq!(inventory.len(), 1);
+    assert_eq!(
+        inventory[0].egress,
+        vec!["socks5h://residential.invalid:1080"]
+    );
+    let (restored_account, restored_credential) = restored.load_account("account-01").unwrap();
+    assert_eq!(
+        restored_account.egress_proxies,
+        stored_account.egress_proxies
+    );
+    assert_eq!(restored_credential.expose(), credential.expose());
+    assert_eq!(restored.recent_audit(10).unwrap().len(), 1);
+    drop(restored);
+
+    let wrong_key = SqliteStore::open(&backup, SecretBox::new([42; 32])).unwrap();
+    assert!(wrong_key.load_account("account-01").is_err());
 }
 
 #[test]
