@@ -8,6 +8,7 @@ use llmap::auth::Authenticator;
 use llmap::config::Config;
 use llmap::data_plane::{DataPlane, ReqwestTransport};
 use llmap::egress::DestinationPolicy;
+use llmap::forward_proxy::{ForwardProxyHandler, generate_ca, serve_forward_proxy};
 use llmap::http_app::{AdminRuntimeConfig, application_router};
 use llmap::routing::Router;
 use llmap::secrets::{AdminPasswordHash, SecretBox, SecretInput, parse_master_key};
@@ -35,11 +36,25 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// Create or inspect the local MITM certificate authority.
+    Ca {
+        #[command(subcommand)]
+        command: CaCommand,
+    },
 }
 
 #[derive(Subcommand)]
 enum ConfigCommand {
     Check {
+        #[arg(long, default_value = "llmap.toml")]
+        config: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum CaCommand {
+    /// Generate a new CA without overwriting existing key material.
+    Init {
         #[arg(long, default_value = "llmap.toml")]
         config: PathBuf,
     },
@@ -63,6 +78,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         Command::Serve { config } => serve(&config).await,
+        Command::Ca {
+            command: CaCommand::Init { config },
+        } => {
+            let config = load_config(&config)?;
+            generate_ca(
+                Path::new(&config.forward_proxy.ca_cert_path),
+                Path::new(&config.forward_proxy.ca_key_path),
+            )?;
+            println!(
+                "created local CA certificate: {}",
+                config.forward_proxy.ca_cert_path
+            );
+            Ok(())
+        }
     }
 }
 
@@ -114,7 +143,7 @@ async fn serve(config_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         SessionPolicy::default(),
     ));
     let app = application_router(
-        data_plane,
+        data_plane.clone(),
         store,
         sessions,
         AdminRuntimeConfig {
@@ -126,9 +155,37 @@ async fn serve(config_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = tokio::net::TcpListener::bind(&config.server.bind).await?;
     info!(bind = %config.server.bind, auth_mode = ?config.auth.mode, "llmap is ready");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    let reverse = async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await
+            .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })
+    };
+    if config.forward_proxy.enabled {
+        let handler = ForwardProxyHandler::new(
+            data_plane,
+            DestinationPolicy::new(config.forward_proxy.allowed_hosts.clone(), false),
+            config.server.max_request_bytes,
+        );
+        let bind = config.forward_proxy.bind.clone();
+        info!(bind = %bind, "HTTPS MITM forward proxy is ready");
+        let forward = async move {
+            serve_forward_proxy(
+                &bind,
+                PathBuf::from(config.forward_proxy.ca_cert_path),
+                PathBuf::from(config.forward_proxy.ca_key_path),
+                handler,
+            )
+            .await
+            .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })
+        };
+        tokio::select! {
+            result = reverse => result?,
+            result = forward => result?,
+        }
+    } else {
+        reverse.await?;
+    }
     Ok(())
 }
 
