@@ -238,6 +238,7 @@ pub fn translate_bedrock_eventstream(body: Body) -> Body {
     let output = async_stream::try_stream! {
         use futures_util::StreamExt;
 
+        Ok::<(), std::io::Error>(())?;
         let mut input = body.into_data_stream();
         let mut buffer = BytesMut::new();
         loop {
