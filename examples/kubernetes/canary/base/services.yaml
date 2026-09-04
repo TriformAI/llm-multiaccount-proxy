@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: llmap-canary-headless
+  labels:
+    app.kubernetes.io/name: llmap
+    app.kubernetes.io/instance: llmap-canary
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector:
+    app.kubernetes.io/name: llmap
+    app.kubernetes.io/instance: llmap-canary
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llmap-canary-route
+  labels:
+    app.kubernetes.io/name: llmap
+    app.kubernetes.io/instance: llmap-canary
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: llmap
+    app.kubernetes.io/instance: llmap-canary
+    rollout.llmap.dev/traffic: disabled
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
