@@ -499,11 +499,15 @@ impl SqliteStore {
     /// Write a transactionally consistent SQLite snapshot without exposing
     /// the separately managed encryption key or overwriting an earlier backup.
     pub fn backup_to(&self, destination: &Path) -> Result<(), StorageError> {
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(destination)
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
         {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            options.mode(0o600);
+        }
+        match options.open(destination) {
             Ok(file) => drop(file),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 return Err(StorageError::BackupDestinationExists);
