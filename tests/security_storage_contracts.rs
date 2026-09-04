@@ -121,7 +121,7 @@ fn compatible_provider_auth_header_is_explicit_and_validated() {
     .unwrap();
     assert_eq!(
         prepared.url.as_str(),
-        "https://api.minimax.invalid/v1/messages"
+        "https://api.minimax.invalid/anthropic/v1/messages"
     );
     assert_eq!(
         prepared.header("authorization"),

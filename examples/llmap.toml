@@ -3,7 +3,7 @@ bind = "127.0.0.1:8080"
 max_request_bytes = 33554432
 allowed_upstream_hosts = [
   "api.anthropic.com",
-  "*.amazonaws.com",
+  "bedrock-runtime.*.amazonaws.com",
 ]
 
 [forward_proxy]
@@ -13,7 +13,7 @@ ca_cert_path = "state/llmap-ca.pem"
 ca_key_path = "state/llmap-ca-key.pem"
 allowed_hosts = [
   "api.anthropic.com",
-  "*.amazonaws.com",
+  "bedrock-runtime.*.amazonaws.com",
 ]
 
 [auth]

@@ -39,7 +39,7 @@ fn configured() -> Config {
             bind = "127.0.0.1:8081"
             ca_cert_path = "state/llmap-ca.pem"
             ca_key_path = "state/llmap-ca-key.pem"
-            allowed_hosts = ["api.anthropic.com", "*.bedrock-runtime.amazonaws.com"]
+            allowed_hosts = ["api.anthropic.com", "bedrock-runtime.*.amazonaws.com"]
 
             [auth]
             mode = "enforce"

@@ -119,9 +119,17 @@ pub fn prepare_request_for_stream(
     {
         bedrock_invoke_url(&account.base_url, &upstream_model, stream)?
     } else {
-        account
-            .base_url
-            .join(path_and_query)
+        let mut base_url = account.base_url.clone();
+        if account.kind == ProviderKind::AnthropicCompatible {
+            let normalized_path = format!("{}/", base_url.path().trim_end_matches('/'));
+            base_url.set_path(&normalized_path);
+        }
+        base_url
+            .join(if account.kind == ProviderKind::AnthropicCompatible {
+                path_and_query.trim_start_matches('/')
+            } else {
+                path_and_query
+            })
             .map_err(|_| ProviderError::InvalidPath)?
     };
     if url.origin() != account.base_url.origin() {

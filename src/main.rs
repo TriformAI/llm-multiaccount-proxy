@@ -10,6 +10,7 @@ use llmap::data_plane::{DataPlane, ReqwestTransport};
 use llmap::egress::DestinationPolicy;
 use llmap::forward_proxy::{ForwardProxyHandler, generate_ca, serve_forward_proxy};
 use llmap::http_app::{AdminRuntimeConfig, application_router};
+use llmap::migration::{import_claudeproxy_env, parse_claudeproxy_env};
 use llmap::routing::Router;
 use llmap::secrets::{AdminPasswordHash, SecretBox, SecretInput, parse_master_key};
 use llmap::storage::SqliteStore;
@@ -41,6 +42,11 @@ enum Command {
         #[command(subcommand)]
         command: CaCommand,
     },
+    /// Import accounts from Claudeproxy's env file without printing secrets.
+    Migrate {
+        #[command(subcommand)]
+        command: MigrateCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -57,6 +63,19 @@ enum CaCommand {
     Init {
         #[arg(long, default_value = "llmap.toml")]
         config: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum MigrateCommand {
+    ClaudeproxyEnv {
+        #[arg(long, default_value = "llmap.toml")]
+        config: PathBuf,
+        #[arg(long)]
+        input: PathBuf,
+        /// Replace deterministic claudeproxy-N account IDs that already exist.
+        #[arg(long)]
+        replace: bool,
     },
 }
 
@@ -92,7 +111,42 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
             Ok(())
         }
+        Command::Migrate {
+            command:
+                MigrateCommand::ClaudeproxyEnv {
+                    config,
+                    input,
+                    replace,
+                },
+        } => migrate_claudeproxy_env(&config, &input, replace),
     }
+}
+
+fn migrate_claudeproxy_env(
+    config_path: &Path,
+    input: &Path,
+    replace: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = load_config(config_path)?;
+    let encoded_master_key = required_environment(&config.storage.master_key_env)?;
+    let master_key = parse_master_key(&encoded_master_key)?;
+    if let Some(parent) = Path::new(&config.storage.database_path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    let source = zeroize::Zeroizing::new(std::fs::read_to_string(input)?);
+    let accounts = parse_claudeproxy_env(&source)?;
+    let store = SqliteStore::open(
+        Path::new(&config.storage.database_path),
+        SecretBox::new(master_key),
+    )?;
+    let summary = import_claudeproxy_env(&store, accounts, replace)?;
+    println!(
+        "imported {} account(s); skipped {} existing account(s)",
+        summary.imported, summary.skipped_existing
+    );
+    Ok(())
 }
 
 async fn serve(config_path: &Path) -> Result<(), Box<dyn std::error::Error>> {

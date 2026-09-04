@@ -7,14 +7,14 @@ data:
     [server]
     bind = "0.0.0.0:8080"
     max_request_bytes = 33554432
-    allowed_upstream_hosts = ["api.anthropic.com", "*.amazonaws.com"]
+    allowed_upstream_hosts = ["api.anthropic.com", "bedrock-runtime.*.amazonaws.com"]
 
     [forward_proxy]
     enabled = false
     bind = "0.0.0.0:8081"
     ca_cert_path = "/var/lib/llmap/llmap-ca.pem"
     ca_key_path = "/var/lib/llmap/llmap-ca-key.pem"
-    allowed_hosts = ["api.anthropic.com", "*.amazonaws.com"]
+    allowed_hosts = ["api.anthropic.com", "bedrock-runtime.*.amazonaws.com"]
 
     [auth]
     mode = "observe"

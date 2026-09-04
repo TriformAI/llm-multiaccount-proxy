@@ -214,7 +214,7 @@ fn default_ca_key_path() -> String {
 fn default_allowed_hosts() -> Vec<String> {
     vec![
         "api.anthropic.com".into(),
-        "*.bedrock-runtime.amazonaws.com".into(),
+        "bedrock-runtime.*.amazonaws.com".into(),
     ]
 }
 

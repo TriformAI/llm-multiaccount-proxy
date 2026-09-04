@@ -186,7 +186,10 @@ fn proxy_chains_are_sticky_ordered_and_never_fall_back_to_direct() {
 #[test]
 fn forward_destination_policy_denies_ssrf_targets() {
     let policy = DestinationPolicy::new(
-        vec!["api.anthropic.com".into(), "*.amazonaws.com".into()],
+        vec![
+            "api.anthropic.com".into(),
+            "bedrock-runtime.*.amazonaws.com".into(),
+        ],
         false,
     );
 
@@ -196,6 +199,10 @@ fn forward_destination_policy_denies_ssrf_targets() {
     policy
         .authorize(&Url::parse("https://bedrock-runtime.eu-north-1.amazonaws.com").unwrap())
         .unwrap();
+    assert_eq!(
+        policy.authorize(&Url::parse("https://s3.eu-north-1.amazonaws.com").unwrap()),
+        Err(EgressError::DestinationNotAllowed)
+    );
     assert_eq!(
         policy.authorize(&Url::parse("http://169.254.169.254/latest/meta-data").unwrap()),
         Err(EgressError::UnsafeDestination)

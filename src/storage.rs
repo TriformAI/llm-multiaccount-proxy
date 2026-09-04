@@ -80,6 +80,7 @@ impl SqliteStore {
                  id TEXT PRIMARY KEY,
                  account_json TEXT NOT NULL,
                  credential_ciphertext TEXT NOT NULL,
+                 egress_ciphertext TEXT,
                  updated_at TEXT NOT NULL
              );
              CREATE TABLE IF NOT EXISTS audit_events (
@@ -109,10 +110,31 @@ impl SqliteStore {
              INSERT OR IGNORE INTO schema_migrations(version, applied_at)
              VALUES (3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));",
         )?;
-        Ok(Self {
+        let has_egress_ciphertext = {
+            let mut statement = connection.prepare("PRAGMA table_info(provider_accounts)")?;
+            let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
+            columns
+                .collect::<Result<Vec<_>, _>>()?
+                .iter()
+                .any(|column| column == "egress_ciphertext")
+        };
+        if !has_egress_ciphertext {
+            connection.execute(
+                "ALTER TABLE provider_accounts ADD COLUMN egress_ciphertext TEXT",
+                [],
+            )?;
+        }
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+             VALUES (4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            [],
+        )?;
+        let store = Self {
             connection: Mutex::new(connection),
             secret_box,
-        })
+        };
+        store.encrypt_legacy_egress_metadata()?;
+        Ok(store)
     }
 
     pub fn upsert_account(
@@ -120,8 +142,7 @@ impl SqliteStore {
         account: &ProviderAccount,
         credential: &SecretInput,
     ) -> Result<(), StorageError> {
-        let account_json = serde_json::to_string(account)
-            .map_err(|error| StorageError::InvalidAccount(error.to_string()))?;
+        let (account_json, egress_ciphertext) = self.account_storage_values(account)?;
         let associated_data = format!("account:{}", account.id);
         let encrypted = self
             .secret_box
@@ -130,13 +151,19 @@ impl SqliteStore {
         let transaction = connection.transaction()?;
         transaction.execute(
             "INSERT INTO provider_accounts (
-                 id, account_json, credential_ciphertext, updated_at
-             ) VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                 id, account_json, credential_ciphertext, egress_ciphertext, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
              ON CONFLICT(id) DO UPDATE SET
                  account_json = excluded.account_json,
                  credential_ciphertext = excluded.credential_ciphertext,
+                 egress_ciphertext = excluded.egress_ciphertext,
                  updated_at = excluded.updated_at",
-            (&account.id, account_json, encrypted.as_storage_value()),
+            rusqlite::params![
+                account.id,
+                account_json,
+                encrypted.as_storage_value(),
+                egress_ciphertext,
+            ],
         )?;
         transaction.execute(
             "DELETE FROM credential_history WHERE account_id = ?1",
@@ -152,8 +179,7 @@ impl SqliteStore {
         credential: &SecretInput,
         previous_valid_until: DateTime<Utc>,
     ) -> Result<(), StorageError> {
-        let account_json = serde_json::to_string(account)
-            .map_err(|error| StorageError::InvalidAccount(error.to_string()))?;
+        let (account_json, egress_ciphertext) = self.account_storage_values(account)?;
         let associated_data = format!("account:{}", account.id);
         let encrypted = self
             .secret_box
@@ -181,13 +207,19 @@ impl SqliteStore {
         }
         transaction.execute(
             "INSERT INTO provider_accounts (
-                 id, account_json, credential_ciphertext, updated_at
-             ) VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                 id, account_json, credential_ciphertext, egress_ciphertext, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
              ON CONFLICT(id) DO UPDATE SET
                  account_json = excluded.account_json,
                  credential_ciphertext = excluded.credential_ciphertext,
+                 egress_ciphertext = excluded.egress_ciphertext,
                  updated_at = excluded.updated_at",
-            (&account.id, account_json, encrypted.as_storage_value()),
+            rusqlite::params![
+                account.id,
+                account_json,
+                encrypted.as_storage_value(),
+                egress_ciphertext,
+            ],
         )?;
         transaction.commit()?;
         Ok(())
@@ -239,18 +271,23 @@ impl SqliteStore {
         let rows = {
             let connection = self.connection.lock();
             let mut statement = connection.prepare(
-                "SELECT account_json, credential_ciphertext
+                "SELECT account_json, credential_ciphertext, egress_ciphertext
                  FROM provider_accounts ORDER BY id",
             )?;
             let rows = statement.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
             })?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
         let mut candidates = Vec::new();
-        for (account_json, ciphertext) in rows {
-            let account: ProviderAccount = serde_json::from_str(&account_json)
+        for (account_json, ciphertext, egress_ciphertext) in rows {
+            let mut account: ProviderAccount = serde_json::from_str(&account_json)
                 .map_err(|error| StorageError::InvalidAccount(error.to_string()))?;
+            self.hydrate_account_egress(&mut account, egress_ciphertext.as_deref())?;
             if account.kind != ProviderKind::ClaudeOauth || !account.enabled {
                 continue;
             }
@@ -332,18 +369,25 @@ impl SqliteStore {
         account_id: &str,
     ) -> Result<(ProviderAccount, SecretInput), StorageError> {
         let result = self.connection.lock().query_row(
-            "SELECT account_json, credential_ciphertext
+            "SELECT account_json, credential_ciphertext, egress_ciphertext
              FROM provider_accounts WHERE id = ?1",
             [account_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
         );
-        let (account_json, ciphertext) = match result {
+        let (account_json, ciphertext, egress_ciphertext) = match result {
             Ok(values) => values,
             Err(rusqlite::Error::QueryReturnedNoRows) => return Err(StorageError::NotFound),
             Err(error) => return Err(StorageError::Database(error)),
         };
-        let account: ProviderAccount = serde_json::from_str(&account_json)
+        let mut account: ProviderAccount = serde_json::from_str(&account_json)
             .map_err(|error| StorageError::InvalidAccount(error.to_string()))?;
+        self.hydrate_account_egress(&mut account, egress_ciphertext.as_deref())?;
         let associated_data = format!("account:{account_id}");
         let secret = self.secret_box.decrypt(
             &crate::secrets::EncryptedSecret::from_storage_value(ciphertext),
@@ -352,6 +396,81 @@ impl SqliteStore {
         let (access_token, _) = decoded_credential(&account.kind, secret.as_str())
             .map_err(StorageError::InvalidAccount)?;
         Ok((account, SecretInput::new(access_token)))
+    }
+
+    fn account_storage_values(
+        &self,
+        account: &ProviderAccount,
+    ) -> Result<(String, String), StorageError> {
+        let egress_json = SecretInput::new(
+            serde_json::to_string(&account.egress_proxies)
+                .map_err(|error| StorageError::InvalidAccount(error.to_string()))?,
+        );
+        for endpoint in &account.egress_proxies {
+            ProxyEndpoint::parse(endpoint).map_err(|error| {
+                StorageError::InvalidAccount(format!("invalid egress proxy: {error}"))
+            })?;
+        }
+        let egress = self.secret_box.encrypt(
+            &egress_json,
+            format!("account-egress:{}", account.id).as_bytes(),
+        )?;
+        let mut public_account = account.clone();
+        public_account.egress_proxies = account
+            .egress_proxies
+            .iter()
+            .map(|endpoint| {
+                ProxyEndpoint::parse(endpoint)
+                    .expect("egress proxies were validated")
+                    .redacted_authority()
+            })
+            .collect();
+        let account_json = serde_json::to_string(&public_account)
+            .map_err(|error| StorageError::InvalidAccount(error.to_string()))?;
+        Ok((account_json, egress.as_storage_value()))
+    }
+
+    fn hydrate_account_egress(
+        &self,
+        account: &mut ProviderAccount,
+        ciphertext: Option<&str>,
+    ) -> Result<(), StorageError> {
+        let Some(ciphertext) = ciphertext.filter(|value| !value.is_empty()) else {
+            return Ok(());
+        };
+        let plaintext = self.secret_box.decrypt(
+            &crate::secrets::EncryptedSecret::from_storage_value(ciphertext.to_owned()),
+            format!("account-egress:{}", account.id).as_bytes(),
+        )?;
+        account.egress_proxies = serde_json::from_str(plaintext.as_str())
+            .map_err(|error| StorageError::InvalidAccount(error.to_string()))?;
+        Ok(())
+    }
+
+    fn encrypt_legacy_egress_metadata(&self) -> Result<(), StorageError> {
+        let rows = {
+            let connection = self.connection.lock();
+            let mut statement = connection.prepare(
+                "SELECT id, account_json FROM provider_accounts
+                 WHERE egress_ciphertext IS NULL OR egress_ciphertext = ''",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        for (id, account_json) in rows {
+            let account: ProviderAccount = serde_json::from_str(&account_json)
+                .map_err(|error| StorageError::InvalidAccount(error.to_string()))?;
+            let (redacted_json, encrypted_egress) = self.account_storage_values(&account)?;
+            self.connection.lock().execute(
+                "UPDATE provider_accounts
+                 SET account_json = ?2, egress_ciphertext = ?3
+                 WHERE id = ?1 AND (egress_ciphertext IS NULL OR egress_ciphertext = '')",
+                rusqlite::params![id, redacted_json, encrypted_egress],
+            )?;
+        }
+        Ok(())
     }
 
     pub fn journal_mode(&self) -> Result<String, StorageError> {

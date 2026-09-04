@@ -203,11 +203,27 @@ impl ProxyChain {
 fn host_matches(host: &str, configured: &str) -> bool {
     let configured = configured.trim_end_matches('.').to_ascii_lowercase();
     if let Some(suffix) = configured.strip_prefix("*.") {
+        if suffix.contains('*') {
+            return label_wildcard_matches(host, &configured);
+        }
         return host.len() > suffix.len()
             && host.ends_with(suffix)
             && host.as_bytes()[host.len() - suffix.len() - 1] == b'.';
     }
+    if configured.contains('*') {
+        return label_wildcard_matches(host, &configured);
+    }
     host == configured
+}
+
+fn label_wildcard_matches(host: &str, configured: &str) -> bool {
+    let host_labels = host.split('.').collect::<Vec<_>>();
+    let configured_labels = configured.split('.').collect::<Vec<_>>();
+    host_labels.len() == configured_labels.len()
+        && host_labels
+            .iter()
+            .zip(configured_labels)
+            .all(|(actual, expected)| expected == "*" || actual == &expected)
 }
 
 fn is_unsafe_host(host: &str) -> bool {
