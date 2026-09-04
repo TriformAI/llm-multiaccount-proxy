@@ -6,7 +6,7 @@ not end-to-end proof.
 
 ## Product and compatibility
 
-- [x] Provider-neutral Rust 1.85 service and single-node SQLite boundary.
+- [x] Provider-neutral Rust 1.88 service and single-node SQLite boundary.
 - [x] Reverse Anthropic-compatible routes and response streaming.
 - [x] Opt-in HTTPS MITM listener and non-overwriting CA lifecycle.
 - [x] `off` / `observe` / `enforce` account-membership authentication.
