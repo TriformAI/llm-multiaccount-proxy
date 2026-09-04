@@ -782,10 +782,13 @@ fn decoded_credential(
     if *kind != ProviderKind::ClaudeOauth || !stored.trim_start().starts_with('{') {
         return Ok((stored.to_owned(), None));
     }
-    let envelope: OAuthCredentialEnvelope =
+    let mut envelope: OAuthCredentialEnvelope =
         serde_json::from_str(stored).map_err(|error| error.to_string())?;
     if envelope.access_token.is_empty() {
         return Err("OAuth access token cannot be empty".into());
     }
-    Ok((envelope.access_token, envelope.expires_at))
+    Ok((
+        std::mem::take(&mut envelope.access_token),
+        envelope.expires_at,
+    ))
 }
