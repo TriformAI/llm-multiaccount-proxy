@@ -266,7 +266,18 @@ async fn admin_create_account_api(
         compatible_auth_prefix: input.compatible_auth_prefix,
     };
     let credential = SecretInput::new(input.credential);
-    if let Err(error) = state.store.upsert_account(&account, &credential) {
+    let result = if account.kind == ProviderKind::ClaudeOauth
+        && state.store.load_account(&account.id).is_ok()
+    {
+        state.store.rotate_account_credential(
+            &account,
+            &credential,
+            Utc::now() + chrono::Duration::minutes(10),
+        )
+    } else {
+        state.store.upsert_account(&account, &credential)
+    };
+    if let Err(error) = result {
         return storage_error(error);
     }
     let _ = state.store.append_audit(&AuditEvent {

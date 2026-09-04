@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use llmap::providers::{ProviderAccount, ProviderKind, prepare_request};
+use llmap::providers::{ProviderAccount, ProviderError, ProviderKind, prepare_request};
 use llmap::secrets::{AdminPasswordHash, SecretBox, SecretInput};
 use llmap::storage::SqliteStore;
 use url::Url;

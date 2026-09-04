@@ -58,6 +58,11 @@ impl AccountCredential {
         self
     }
 
+    pub fn with_current_expiry(mut self, expires_at: Option<DateTime<Utc>>) -> Self {
+        self.current.expires_at = expires_at;
+        self
+    }
+
     pub fn paused(mut self) -> Self {
         self.active = false;
         self
@@ -128,8 +133,9 @@ impl Authenticator {
         let presented_digest = self.digest(presented_token.unwrap_or_default());
         let mut matched_account_id = None;
         for account in accounts {
+            let current_not_expired = account.current.expires_at.is_none_or(|expiry| expiry > now);
             let current_match = presented_digest.ct_eq(&account.current.digest);
-            if account.active && bool::from(current_match) {
+            if account.active && current_not_expired && bool::from(current_match) {
                 matched_account_id = Some(account.account_id.clone());
             }
             for previous in &account.previous {

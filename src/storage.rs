@@ -10,7 +10,7 @@ use thiserror::Error;
 use crate::auth::{AccountCredential, Authenticator, CredentialSnapshot};
 use crate::data_plane::{AccountRepository, ProxyAuditRecord, RepositoryError};
 use crate::egress::ProxyEndpoint;
-use crate::providers::ProviderAccount;
+use crate::providers::{ProviderAccount, ProviderKind};
 use crate::routing::RouteAccount;
 use crate::secrets::{SecretBox, SecretError, SecretInput};
 
@@ -87,12 +87,19 @@ impl SqliteStore {
                  outcome TEXT NOT NULL,
                  latency_ms INTEGER
              );
+             CREATE TABLE IF NOT EXISTS credential_history (
+                 account_id TEXT PRIMARY KEY REFERENCES provider_accounts(id) ON DELETE CASCADE,
+                 credential_ciphertext TEXT NOT NULL,
+                 expires_at TEXT NOT NULL
+             );
              CREATE INDEX IF NOT EXISTS audit_events_occurred_at
                  ON audit_events(occurred_at DESC);
              INSERT OR IGNORE INTO schema_migrations(version, applied_at)
              VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
              INSERT OR IGNORE INTO schema_migrations(version, applied_at)
-             VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));",
+             VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+             INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+             VALUES (3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));",
         )?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -111,7 +118,9 @@ impl SqliteStore {
         let encrypted = self
             .secret_box
             .encrypt(credential, associated_data.as_bytes())?;
-        self.connection.lock().execute(
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        transaction.execute(
             "INSERT INTO provider_accounts (
                  id, account_json, credential_ciphertext, updated_at
              ) VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -121,6 +130,58 @@ impl SqliteStore {
                  updated_at = excluded.updated_at",
             (&account.id, account_json, encrypted.as_storage_value()),
         )?;
+        transaction.execute(
+            "DELETE FROM credential_history WHERE account_id = ?1",
+            [&account.id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn rotate_account_credential(
+        &self,
+        account: &ProviderAccount,
+        credential: &SecretInput,
+        previous_valid_until: DateTime<Utc>,
+    ) -> Result<(), StorageError> {
+        let account_json = serde_json::to_string(account)
+            .map_err(|error| StorageError::InvalidAccount(error.to_string()))?;
+        let associated_data = format!("account:{}", account.id);
+        let encrypted = self
+            .secret_box
+            .encrypt(credential, associated_data.as_bytes())?;
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        let previous = transaction.query_row(
+            "SELECT credential_ciphertext FROM provider_accounts WHERE id = ?1",
+            [&account.id],
+            |row| row.get::<_, String>(0),
+        );
+        match previous {
+            Ok(previous) => {
+                transaction.execute(
+                    "INSERT INTO credential_history (account_id, credential_ciphertext, expires_at)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(account_id) DO UPDATE SET
+                         credential_ciphertext = excluded.credential_ciphertext,
+                         expires_at = excluded.expires_at",
+                    rusqlite::params![account.id, previous, previous_valid_until.to_rfc3339(),],
+                )?;
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => {}
+            Err(error) => return Err(StorageError::Database(error)),
+        }
+        transaction.execute(
+            "INSERT INTO provider_accounts (
+                 id, account_json, credential_ciphertext, updated_at
+             ) VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+             ON CONFLICT(id) DO UPDATE SET
+                 account_json = excluded.account_json,
+                 credential_ciphertext = excluded.credential_ciphertext,
+                 updated_at = excluded.updated_at",
+            (&account.id, account_json, encrypted.as_storage_value()),
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -146,7 +207,9 @@ impl SqliteStore {
             &crate::secrets::EncryptedSecret::from_storage_value(ciphertext),
             associated_data.as_bytes(),
         )?;
-        Ok((account, SecretInput::new(secret.as_str())))
+        let (access_token, _) = decoded_credential(&account.kind, secret.as_str())
+            .map_err(StorageError::InvalidAccount)?;
+        Ok((account, SecretInput::new(access_token)))
     }
 
     pub fn journal_mode(&self) -> Result<String, StorageError> {
@@ -222,9 +285,27 @@ impl SqliteStore {
     }
 
     pub fn set_account_enabled(&self, account_id: &str, enabled: bool) -> Result<(), StorageError> {
-        let (mut account, credential) = self.load_account(account_id)?;
+        let account_json = match self.connection.lock().query_row(
+            "SELECT account_json FROM provider_accounts WHERE id = ?1",
+            [account_id],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(json) => json,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Err(StorageError::NotFound),
+            Err(error) => return Err(StorageError::Database(error)),
+        };
+        let mut account: ProviderAccount = serde_json::from_str(&account_json)
+            .map_err(|error| StorageError::InvalidAccount(error.to_string()))?;
         account.enabled = enabled;
-        self.upsert_account(&account, &credential)
+        let updated = serde_json::to_string(&account)
+            .map_err(|error| StorageError::InvalidAccount(error.to_string()))?;
+        self.connection.lock().execute(
+            "UPDATE provider_accounts
+             SET account_json = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE id = ?1",
+            (account_id, updated),
+        )?;
+        Ok(())
     }
 
     pub fn delete_account(&self, account_id: &str) -> Result<(), StorageError> {
@@ -335,13 +416,21 @@ impl AccountRepository for SqliteStore {
             let connection = self.connection.lock();
             let mut statement = connection
                 .prepare(
-                    "SELECT account_json, credential_ciphertext
-                     FROM provider_accounts ORDER BY id",
+                    "SELECT p.account_json, p.credential_ciphertext,
+                            h.credential_ciphertext, h.expires_at
+                     FROM provider_accounts p
+                     LEFT JOIN credential_history h ON h.account_id = p.id
+                     ORDER BY p.id",
                 )
                 .map_err(|_| RepositoryError::Unavailable)?;
             let mapped = statement
                 .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
                 })
                 .map_err(|_| RepositoryError::Unavailable)?;
             mapped
@@ -350,7 +439,7 @@ impl AccountRepository for SqliteStore {
         };
 
         let mut credentials = Vec::with_capacity(rows.len());
-        for (account_json, ciphertext) in rows {
+        for (account_json, ciphertext, previous_ciphertext, previous_expires_at) in rows {
             let account: ProviderAccount =
                 serde_json::from_str(&account_json).map_err(|_| RepositoryError::InvalidData)?;
             let associated_data = format!("account:{}", account.id);
@@ -361,7 +450,34 @@ impl AccountRepository for SqliteStore {
                     associated_data.as_bytes(),
                 )
                 .map_err(|_| RepositoryError::InvalidData)?;
-            let credential = AccountCredential::active(authenticator, &account.id, secret.as_str());
+            let (current_token, current_expiry) =
+                decoded_credential(&account.kind, secret.as_str())
+                    .map_err(|_| RepositoryError::InvalidData)?;
+            let mut credential =
+                AccountCredential::active(authenticator, &account.id, &current_token)
+                    .with_current_expiry(current_expiry);
+            if let (Some(previous_ciphertext), Some(previous_expires_at)) =
+                (previous_ciphertext, previous_expires_at)
+            {
+                let previous_expiry = DateTime::parse_from_rfc3339(&previous_expires_at)
+                    .map_err(|_| RepositoryError::InvalidData)?
+                    .with_timezone(&Utc);
+                if previous_expiry > _now {
+                    let previous = self
+                        .secret_box
+                        .decrypt(
+                            &crate::secrets::EncryptedSecret::from_storage_value(
+                                previous_ciphertext,
+                            ),
+                            associated_data.as_bytes(),
+                        )
+                        .map_err(|_| RepositoryError::InvalidData)?;
+                    let (previous_token, _) = decoded_credential(&account.kind, previous.as_str())
+                        .map_err(|_| RepositoryError::InvalidData)?;
+                    credential =
+                        credential.with_previous(authenticator, &previous_token, previous_expiry);
+                }
+            }
             credentials.push(if account.enabled {
                 credential
             } else {
@@ -405,4 +521,26 @@ impl AccountRepository for SqliteStore {
             }
         })
     }
+}
+
+#[derive(serde::Deserialize)]
+struct OAuthCredentialEnvelope {
+    access_token: String,
+    #[serde(default)]
+    expires_at: Option<DateTime<Utc>>,
+}
+
+fn decoded_credential(
+    kind: &ProviderKind,
+    stored: &str,
+) -> Result<(String, Option<DateTime<Utc>>), String> {
+    if *kind != ProviderKind::ClaudeOauth || !stored.trim_start().starts_with('{') {
+        return Ok((stored.to_owned(), None));
+    }
+    let envelope: OAuthCredentialEnvelope =
+        serde_json::from_str(stored).map_err(|error| error.to_string())?;
+    if envelope.access_token.is_empty() {
+        return Err("OAuth access token cannot be empty".into());
+    }
+    Ok((envelope.access_token, envelope.expires_at))
 }
