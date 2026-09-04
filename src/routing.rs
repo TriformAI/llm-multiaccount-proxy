@@ -214,5 +214,5 @@ fn eligible(account: &RouteAccount, model: &str, now: DateTime<Utc>) -> bool {
         && account
             .depleted_until
             .is_none_or(|depleted_until| depleted_until <= now)
-        && (model.is_empty() || account.models.is_empty() || account.models.contains(model))
+        && (model.is_empty() || crate::models::accepted(&account.models, model))
 }

@@ -104,11 +104,9 @@ pub fn prepare_request_for_stream(
     if !path_and_query.starts_with('/') || path_and_query.starts_with("//") {
         return Err(ProviderError::InvalidPath);
     }
-    let upstream_model = account
-        .model_map
-        .get(requested_model)
-        .cloned()
-        .unwrap_or_else(|| requested_model.to_owned());
+    let upstream_model = crate::models::resolve(&account.model_map, requested_model)
+        .unwrap_or(requested_model)
+        .to_owned();
     let url = if matches!(
         account.kind,
         ProviderKind::BedrockApiKey | ProviderKind::BedrockSigV4

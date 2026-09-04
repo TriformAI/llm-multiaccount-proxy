@@ -8,7 +8,7 @@
 - `llmap_responses_total`
 
 Useful first alerts are a sustained authentication-failure increase after
-enforcement, upstream failures above the provider baseline, request/response
+observe-mode mismatch or enforcement, upstream failures above the provider baseline, request/response
 counter divergence, and a process that is ready but has no eligible account.
 
 SQLite audit rows retain timestamp, caller account attribution when matched,

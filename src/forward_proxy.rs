@@ -20,6 +20,7 @@ use hudsucker::{Body, HttpContext, HttpHandler, Proxy, RequestOrResponse};
 use parking_lot::Mutex;
 use thiserror::Error;
 use url::Url;
+use zeroize::Zeroizing;
 
 use crate::data_plane::{DataPlane, ProxyRequest};
 use crate::egress::DestinationPolicy;
@@ -168,7 +169,8 @@ pub fn generate_ca(cert_path: &Path, key_path: &Path) -> Result<(), ForwardProxy
         .self_signed(&signing_key)
         .map_err(|error| ForwardProxyError::Certificate(error.to_string()))?;
 
-    write_new(key_path, signing_key.serialize_pem().as_bytes(), true)?;
+    let key_pem = Zeroizing::new(signing_key.serialize_pem());
+    write_new(key_path, key_pem.as_bytes(), true)?;
     if let Err(error) = write_new(cert_path, certificate.pem().as_bytes(), false) {
         let _ = std::fs::remove_file(key_path);
         return Err(error);
@@ -178,7 +180,7 @@ pub fn generate_ca(cert_path: &Path, key_path: &Path) -> Result<(), ForwardProxy
 
 pub fn load_ca(cert_path: &Path, key_path: &Path) -> Result<RcgenAuthority, ForwardProxyError> {
     let cert_pem = std::fs::read_to_string(cert_path)?;
-    let key_pem = std::fs::read_to_string(key_path)?;
+    let key_pem = Zeroizing::new(std::fs::read_to_string(key_path)?);
     let key_pair = KeyPair::from_pem(&key_pem)
         .map_err(|error| ForwardProxyError::Certificate(error.to_string()))?;
     let issuer = Issuer::from_ca_cert_pem(&cert_pem, key_pair)

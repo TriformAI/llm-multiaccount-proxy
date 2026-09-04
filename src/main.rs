@@ -17,6 +17,7 @@ use llmap::storage::SqliteStore;
 use sha2::{Digest, Sha256};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
+use zeroize::Zeroizing;
 
 #[derive(Parser)]
 #[command(name = "llmap", version, about = "Provider-neutral LLM account proxy")]
@@ -128,7 +129,7 @@ fn migrate_claudeproxy_env(
     replace: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = load_config(config_path)?;
-    let encoded_master_key = required_environment(&config.storage.master_key_env)?;
+    let encoded_master_key = Zeroizing::new(required_environment(&config.storage.master_key_env)?);
     let master_key = parse_master_key(&encoded_master_key)?;
     if let Some(parent) = Path::new(&config.storage.database_path).parent() {
         if !parent.as_os_str().is_empty() {
@@ -153,7 +154,7 @@ async fn serve(config_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let config = load_config(config_path)?;
     initialize_logging();
 
-    let encoded_master_key = required_environment(&config.storage.master_key_env)?;
+    let encoded_master_key = Zeroizing::new(required_environment(&config.storage.master_key_env)?);
     let master_key = parse_master_key(&encoded_master_key)?;
     let admin_password =
         SecretInput::new(required_environment(&config.admin.bootstrap_password_env)?);

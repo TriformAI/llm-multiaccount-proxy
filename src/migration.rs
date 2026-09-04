@@ -375,22 +375,22 @@ fn convert_api_provider(
         .as_deref()
         .filter(|key| !key.is_empty())
         .ok_or_else(|| MigrationError::InvalidProvider(index, "API key is missing".into()))?;
-    let mut base_url = Url::parse(
-        legacy
-            .base_url
-            .as_deref()
-            .ok_or_else(|| MigrationError::InvalidProvider(index, "base URL is missing".into()))?,
-    )
-    .map_err(|_| MigrationError::InvalidProvider(index, "base URL is invalid".into()))?;
+    let provider_is_anthropic = provider_type == "anthropic" || provider_type == "claude-api";
+    let base_url_source = legacy
+        .base_url
+        .as_deref()
+        .or(provider_is_anthropic.then_some("https://api.anthropic.com/"))
+        .ok_or_else(|| MigrationError::InvalidProvider(index, "base URL is missing".into()))?;
+    let mut base_url = Url::parse(base_url_source)
+        .map_err(|_| MigrationError::InvalidProvider(index, "base URL is invalid".into()))?;
     if base_url.scheme() != "https" || base_url.host_str().is_none() {
         return Err(MigrationError::InvalidProvider(
             index,
             "base URL must use HTTPS".into(),
         ));
     }
-    let official_anthropic = provider_type == "anthropic"
-        || provider_type == "claude-api"
-        || base_url.host_str() == Some("api.anthropic.com");
+    let official_anthropic =
+        provider_is_anthropic || base_url.host_str() == Some("api.anthropic.com");
     if official_anthropic {
         return Ok((
             ProviderKind::AnthropicApiKey,

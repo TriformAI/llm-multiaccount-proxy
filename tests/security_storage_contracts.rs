@@ -155,6 +155,20 @@ fn provider_adapters_rewrite_model_and_own_upstream_authentication() {
 }
 
 #[test]
+fn provider_model_maps_accept_family_and_default_keys() {
+    let credential = SecretInput::new("fake-upstream-token");
+    let mut family = account(ProviderKind::AnthropicApiKey);
+    family.model_map = BTreeMap::from([("sonnet".into(), "provider-sonnet".into())]);
+    let prepared =
+        prepare_request(&family, &credential, "/v1/messages", "claude-sonnet-4-6").unwrap();
+    assert_eq!(prepared.upstream_model, "provider-sonnet");
+
+    family.model_map = BTreeMap::from([("default".into(), "provider-default".into())]);
+    let prepared = prepare_request(&family, &credential, "/v1/messages", "future-model").unwrap();
+    assert_eq!(prepared.upstream_model, "provider-default");
+}
+
+#[test]
 fn compatible_provider_auth_header_is_explicit_and_validated() {
     let mut compatible = account(ProviderKind::AnthropicCompatible);
     compatible.base_url = Url::parse("https://api.minimax.invalid/anthropic/").unwrap();

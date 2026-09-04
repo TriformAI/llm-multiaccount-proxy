@@ -229,7 +229,7 @@ impl DataPlane {
             .map_err(|_| DataPlaneError::CredentialStoreUnavailable)?;
         let auth_decision = match self.authenticator.authorize(
             self.auth_mode,
-            presented_token.as_deref(),
+            presented_token.as_ref().map(|token| token.as_str()),
             &snapshot,
             now,
         ) {
@@ -261,6 +261,11 @@ impl DataPlane {
                 return Err(mapped);
             }
         };
+        if auth_decision.observed_failure {
+            self.metrics
+                .authentication_failures_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
 
         let session_id = session_id(&request)?;
         let mut json = if request.body.is_empty() {
@@ -614,7 +619,7 @@ fn destination_requires_local_resolution(endpoint: &ProxyEndpoint) -> bool {
     endpoint.protocol == ProxyProtocol::Socks5
 }
 
-fn presented_token(headers: &HeaderMap) -> Result<Option<String>, DataPlaneError> {
+fn presented_token(headers: &HeaderMap) -> Result<Option<Zeroizing<String>>, DataPlaneError> {
     let api_key = headers
         .get("x-api-key")
         .map(|value| value.to_str().map(str::trim))
@@ -636,7 +641,9 @@ fn presented_token(headers: &HeaderMap) -> Result<Option<String>, DataPlaneError
             return Err(DataPlaneError::Unauthorized);
         }
     }
-    Ok(api_key.or(bearer).map(str::to_owned))
+    Ok(api_key
+        .or(bearer)
+        .map(|token| Zeroizing::new(token.to_owned())))
 }
 
 fn session_id(request: &ProxyRequest) -> Result<Option<String>, DataPlaneError> {

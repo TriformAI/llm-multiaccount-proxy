@@ -226,6 +226,7 @@ async fn upstream_rate_limit_evicts_the_sticky_binding_for_the_next_request() {
 
     assert_eq!(response.status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(transport.requests.lock()[0].account_id, "quiet");
+    assert_eq!(plane.metrics().authentication_failures_total, 1);
 }
 
 #[tokio::test]

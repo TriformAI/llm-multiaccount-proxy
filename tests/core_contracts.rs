@@ -168,6 +168,36 @@ fn routing_counts_in_flight_work_and_expires_idle_stickiness() {
 }
 
 #[test]
+fn routing_eligibility_understands_family_and_default_model_maps() {
+    let mut family = account("family", 0);
+    family.models = HashSet::from(["sonnet".into()]);
+    let mut fallback = account("fallback", 1);
+    fallback.models = HashSet::from(["default".into()]);
+    let mut router = Router::new(vec![family, fallback]);
+
+    let sonnet = router
+        .choose(
+            &RouteRequest {
+                session_id: None,
+                model: "claude-sonnet-4-6".into(),
+            },
+            now(),
+        )
+        .unwrap();
+    assert_eq!(sonnet.account_id, "family");
+    let unknown = router
+        .choose(
+            &RouteRequest {
+                session_id: None,
+                model: "future-model".into(),
+            },
+            now(),
+        )
+        .unwrap();
+    assert_eq!(unknown.account_id, "fallback");
+}
+
+#[test]
 fn retries_stop_at_the_first_irreversible_streaming_boundary() {
     assert_eq!(
         retry_decision(UpstreamOutcome::TransientFailure, false, false),

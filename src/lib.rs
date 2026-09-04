@@ -10,6 +10,7 @@ pub mod egress;
 pub mod forward_proxy;
 pub mod http_app;
 pub mod migration;
+pub mod models;
 pub mod providers;
 pub mod routing;
 pub mod secrets;

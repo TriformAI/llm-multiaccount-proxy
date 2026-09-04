@@ -19,7 +19,9 @@ authorization headers are discarded; each adapter owns its outbound auth.
 
 ## Model maps
 
-`model_map` maps a client-facing model name to an upstream name. Empty maps mean
+`model_map` maps a client-facing model name to an upstream name. It also accepts
+the family keys `opus`, `sonnet`, `haiku`, and `fable`, plus `default` as a
+catch-all. Resolution order is exact name, family, then default. Empty maps mean
 the account advertises all client model names and sends them unchanged. A
 non-empty map both controls eligibility and rewrites the JSON `model` field.
 
