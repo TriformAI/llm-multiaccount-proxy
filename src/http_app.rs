@@ -307,6 +307,9 @@ async fn admin_create_account_api(
     if let Err(error) = refresh_routes(&state).await {
         return storage_error(error);
     }
+    if let Err(error) = state.data_plane.reset_account_health(&account.id).await {
+        return data_plane_error(error);
+    }
     (StatusCode::CREATED, Json(json!({"id": account.id}))).into_response()
 }
 
@@ -353,6 +356,9 @@ async fn admin_rotate_account_credential_api(
     };
     if let Err(error) = result {
         return storage_error(error);
+    }
+    if let Err(error) = state.data_plane.reset_account_health(&account_id).await {
+        return data_plane_error(error);
     }
     let _ = state.store.append_audit(&AuditEvent {
         occurred_at: Utc::now(),
@@ -550,6 +556,15 @@ fn storage_error(error: StorageError) -> Response {
         ),
     };
     api_error(status, code, &error.to_string(), suggestion)
+}
+
+fn data_plane_error(error: DataPlaneError) -> Response {
+    api_error(
+        error.status(),
+        "routing_state_unavailable",
+        &error.to_string(),
+        "Retry after the in-memory routing state has refreshed.",
+    )
 }
 
 fn api_error(status: StatusCode, code: &str, message: &str, suggestion: &str) -> Response {

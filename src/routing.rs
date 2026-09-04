@@ -92,14 +92,41 @@ impl Router {
         }
     }
 
-    pub fn replace_accounts(&mut self, accounts: Vec<RouteAccount>) {
+    pub fn replace_accounts(&mut self, mut accounts: Vec<RouteAccount>) {
+        for account in &mut accounts {
+            if let Some(previous) = self
+                .accounts
+                .get(&account.id)
+                .filter(|previous| previous.enabled == account.enabled)
+            {
+                account.healthy = previous.healthy;
+                account.in_flight = previous.in_flight;
+                account.utilization_basis_points = previous.utilization_basis_points;
+                account.depleted_until = previous.depleted_until;
+            }
+        }
         let replacement: HashMap<_, _> = accounts
             .into_iter()
             .map(|account| (account.id.clone(), account))
             .collect();
-        self.sessions
-            .retain(|_, binding| replacement.contains_key(&binding.account_id));
+        self.sessions.retain(|_, binding| {
+            replacement
+                .get(&binding.account_id)
+                .is_some_and(|account| account.enabled)
+        });
         self.accounts = replacement;
+    }
+
+    pub fn reset_account_health(&mut self, account_id: &str) -> Result<(), RouteError> {
+        let account = self
+            .accounts
+            .get_mut(account_id)
+            .ok_or(RouteError::UnknownAccount)?;
+        account.healthy = true;
+        account.depleted_until = None;
+        self.sessions
+            .retain(|_, binding| binding.account_id != account_id);
+        Ok(())
     }
 
     pub fn session_count(&mut self, now: DateTime<Utc>) -> usize {

@@ -470,6 +470,14 @@ impl DataPlane {
         self.router.lock().await.replace_accounts(accounts);
     }
 
+    pub async fn reset_account_health(&self, account_id: &str) -> Result<(), DataPlaneError> {
+        self.router
+            .lock()
+            .await
+            .reset_account_health(account_id)
+            .map_err(|_| DataPlaneError::NoCapacity)
+    }
+
     pub fn metrics(&self) -> MetricsSnapshot {
         MetricsSnapshot {
             requests_total: self.metrics.requests_total.load(Ordering::Relaxed),

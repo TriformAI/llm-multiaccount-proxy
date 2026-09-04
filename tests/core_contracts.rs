@@ -198,6 +198,49 @@ fn routing_eligibility_understands_family_and_default_model_maps() {
 }
 
 #[test]
+fn account_refresh_preserves_other_failures_and_rotation_resets_only_its_account() {
+    let mut router = Router::new(vec![account("a", 0), account("b", 0)]);
+    router
+        .record_outcome("a", UpstreamOutcome::Unauthorized)
+        .unwrap();
+    router
+        .record_outcome(
+            "b",
+            UpstreamOutcome::RateLimited {
+                retry_at: now() + Duration::minutes(5),
+            },
+        )
+        .unwrap();
+    router.replace_accounts(vec![account("a", 0), account("b", 0)]);
+    assert!(
+        router
+            .choose(
+                &RouteRequest {
+                    session_id: None,
+                    model: "claude-sonnet-4-5".into(),
+                },
+                now(),
+            )
+            .is_err()
+    );
+
+    router.reset_account_health("a").unwrap();
+    assert_eq!(
+        router
+            .choose(
+                &RouteRequest {
+                    session_id: None,
+                    model: "claude-sonnet-4-5".into(),
+                },
+                now(),
+            )
+            .unwrap()
+            .account_id,
+        "a"
+    );
+}
+
+#[test]
 fn retries_stop_at_the_first_irreversible_streaming_boundary() {
     assert_eq!(
         retry_decision(UpstreamOutcome::TransientFailure, false, false),
