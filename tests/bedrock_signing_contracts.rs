@@ -8,7 +8,6 @@ use axum::{
 };
 use bytes::Bytes;
 use chrono::{DateTime, TimeZone, Utc};
-use http_body_util::BodyExt;
 use llmap::auth::{AuthMode, Authenticator, CredentialSnapshot};
 use llmap::data_plane::{
     AccountRepository, DataPlane, ProxyRequest, RepositoryError, TransportError, UpstreamRequest,
