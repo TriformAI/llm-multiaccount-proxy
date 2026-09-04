@@ -345,6 +345,7 @@ impl DataPlane {
         } else {
             request.body
         };
+        copy_safe_request_headers(&request.headers, prepared.headers_mut())?;
         finalize_request_auth(
             &account,
             &credential,
@@ -354,8 +355,7 @@ impl DataPlane {
             &mut prepared,
         )
         .map_err(|_| DataPlaneError::UpstreamUnavailable)?;
-        let (url, _upstream_model, mut headers) = prepared.into_parts();
-        copy_safe_request_headers(&request.headers, &mut headers)?;
+        let (url, _upstream_model, headers) = prepared.into_parts();
 
         self.router
             .lock()

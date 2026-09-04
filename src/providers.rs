@@ -62,11 +62,19 @@ pub struct PreparedProviderRequest {
     headers: BTreeMap<String, Zeroizing<String>>,
 }
 
+const BEDROCK_MAX_PAYLOAD_BYTES: usize = 24 * 1024 * 1024;
+const BEDROCK_MAX_HEADERS_BYTES: usize = 128 * 1024;
+const BEDROCK_MAX_FRAME_BYTES: usize = 16 + BEDROCK_MAX_HEADERS_BYTES + BEDROCK_MAX_PAYLOAD_BYTES;
+
 impl PreparedProviderRequest {
     pub fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .get(&name.to_ascii_lowercase())
             .map(|value| value.as_str())
+    }
+
+    pub(crate) fn headers_mut(&mut self) -> &mut BTreeMap<String, Zeroizing<String>> {
+        &mut self.headers
     }
 
     pub(crate) fn into_parts(self) -> (Url, String, BTreeMap<String, Zeroizing<String>>) {
@@ -197,7 +205,8 @@ pub fn decode_bedrock_frame(frame: &[u8]) -> Result<Bytes, ProviderError> {
             .map_err(|_| ProviderError::InvalidBedrockFrame)?,
     ) as usize;
     if total_length != frame.len()
-        || total_length > 16 * 1024 * 1024
+        || total_length > BEDROCK_MAX_FRAME_BYTES
+        || headers_length > BEDROCK_MAX_HEADERS_BYTES
         || headers_length > total_length.saturating_sub(16)
     {
         return Err(ProviderError::InvalidBedrockFrame);
@@ -217,8 +226,41 @@ pub fn decode_bedrock_frame(frame: &[u8]) -> Result<Bytes, ProviderError> {
     {
         return Err(ProviderError::InvalidBedrockFrame);
     }
+    let headers = decode_bedrock_headers(&frame[12..12 + headers_length])?;
+    let message_type = headers
+        .get(":message-type")
+        .map(String::as_str)
+        .ok_or(ProviderError::InvalidBedrockFrame)?;
     let payload_start = 12 + headers_length;
     let payload = &frame[payload_start..total_length - 4];
+
+    if matches!(message_type, "exception" | "error") {
+        let exception_type = headers
+            .get(":event-type")
+            .or_else(|| headers.get(":exception-type"))
+            .or_else(|| headers.get(":error-code"))
+            .ok_or(ProviderError::InvalidBedrockFrame)?;
+        let safe_type = format!(
+            "bedrock_{}",
+            normalize_bedrock_exception_type(exception_type)
+        );
+        let data = serde_json::json!({
+            "type": "error",
+            "error": {
+                "type": safe_type,
+                "message": format!("Amazon Bedrock stream ended with {safe_type}"),
+            }
+        });
+        return Ok(Bytes::from(format!("event: error\ndata: {data}\n\n")));
+    }
+
+    let event_type = headers
+        .get(":event-type")
+        .map(String::as_str)
+        .ok_or(ProviderError::InvalidBedrockFrame)?;
+    if message_type != "event" || event_type != "chunk" {
+        return Err(ProviderError::InvalidBedrockFrame);
+    }
     let envelope: serde_json::Value =
         serde_json::from_slice(payload).map_err(|_| ProviderError::InvalidBedrockFrame)?;
     let encoded = envelope
@@ -240,6 +282,113 @@ pub fn decode_bedrock_frame(frame: &[u8]) -> Result<Bytes, ProviderError> {
     )))
 }
 
+fn decode_bedrock_headers(encoded: &[u8]) -> Result<BTreeMap<String, String>, ProviderError> {
+    let mut headers = BTreeMap::new();
+    let mut cursor = 0;
+    while cursor < encoded.len() {
+        let name_length = usize::from(encoded[cursor]);
+        cursor += 1;
+        if name_length == 0 || cursor + name_length + 1 > encoded.len() {
+            return Err(ProviderError::InvalidBedrockFrame);
+        }
+        let name = std::str::from_utf8(&encoded[cursor..cursor + name_length])
+            .map_err(|_| ProviderError::InvalidBedrockFrame)?;
+        cursor += name_length;
+        let value_type = encoded[cursor];
+        cursor += 1;
+
+        let value = match value_type {
+            0 | 1 => None,
+            2 => {
+                skip_bedrock_header_bytes(encoded, &mut cursor, 1)?;
+                None
+            }
+            3 => {
+                skip_bedrock_header_bytes(encoded, &mut cursor, 2)?;
+                None
+            }
+            4 => {
+                skip_bedrock_header_bytes(encoded, &mut cursor, 4)?;
+                None
+            }
+            5 | 8 => {
+                skip_bedrock_header_bytes(encoded, &mut cursor, 8)?;
+                None
+            }
+            6 | 7 => {
+                if cursor + 2 > encoded.len() {
+                    return Err(ProviderError::InvalidBedrockFrame);
+                }
+                let value_length =
+                    usize::from(u16::from_be_bytes([encoded[cursor], encoded[cursor + 1]]));
+                cursor += 2;
+                if cursor + value_length > encoded.len() {
+                    return Err(ProviderError::InvalidBedrockFrame);
+                }
+                let value = if value_type == 7 {
+                    Some(
+                        std::str::from_utf8(&encoded[cursor..cursor + value_length])
+                            .map_err(|_| ProviderError::InvalidBedrockFrame)?
+                            .to_owned(),
+                    )
+                } else {
+                    None
+                };
+                cursor += value_length;
+                value
+            }
+            9 => {
+                skip_bedrock_header_bytes(encoded, &mut cursor, 16)?;
+                None
+            }
+            _ => return Err(ProviderError::InvalidBedrockFrame),
+        };
+
+        if name.starts_with(':') {
+            let value = value.ok_or(ProviderError::InvalidBedrockFrame)?;
+            if headers.insert(name.to_owned(), value).is_some() {
+                return Err(ProviderError::InvalidBedrockFrame);
+            }
+        }
+    }
+    Ok(headers)
+}
+
+fn skip_bedrock_header_bytes(
+    encoded: &[u8],
+    cursor: &mut usize,
+    length: usize,
+) -> Result<(), ProviderError> {
+    if *cursor + length > encoded.len() {
+        return Err(ProviderError::InvalidBedrockFrame);
+    }
+    *cursor += length;
+    Ok(())
+}
+
+fn normalize_bedrock_exception_type(value: &str) -> String {
+    let mut normalized = String::new();
+    let mut previous_was_lowercase_or_digit = false;
+    for character in value.chars() {
+        if character.is_ascii_uppercase() {
+            if previous_was_lowercase_or_digit && !normalized.ends_with('_') {
+                normalized.push('_');
+            }
+            normalized.push(character.to_ascii_lowercase());
+            previous_was_lowercase_or_digit = false;
+        } else if character.is_ascii_alphanumeric() {
+            normalized.push(character.to_ascii_lowercase());
+            previous_was_lowercase_or_digit = true;
+        } else {
+            if !normalized.is_empty() && !normalized.ends_with('_') {
+                normalized.push('_');
+            }
+            previous_was_lowercase_or_digit = false;
+        }
+    }
+    normalized.trim_matches('_').to_owned()
+}
+
 pub fn translate_bedrock_eventstream(body: Body) -> Body {
     let output = async_stream::stream! {
         use futures_util::StreamExt;
@@ -252,7 +401,7 @@ pub fn translate_bedrock_eventstream(body: Body) -> Body {
                 let total_length = u32::from_be_bytes([
                     buffer[0], buffer[1], buffer[2], buffer[3],
                 ]) as usize;
-                if !(16..=16 * 1024 * 1024).contains(&total_length) {
+                if !(16..=BEDROCK_MAX_FRAME_BYTES).contains(&total_length) {
                     yield Err::<Bytes, std::io::Error>(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "invalid Bedrock event-stream frame length",
@@ -338,6 +487,9 @@ pub fn finalize_request_auth(
     }
 
     let mut signed_header_names = vec!["host", "x-amz-content-sha256", "x-amz-date"];
+    if prepared.headers.contains_key("content-type") {
+        signed_header_names.push("content-type");
+    }
     if credential.session_token.is_some() {
         signed_header_names.push("x-amz-security-token");
     }
