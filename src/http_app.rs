@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
 use axum::extract::{Path, State};
-use axum::http::{Request, StatusCode};
+use axum::http::Request;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Json, Router};

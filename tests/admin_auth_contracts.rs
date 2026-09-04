@@ -110,13 +110,13 @@ fn sessions_expire_on_idle_and_absolute_boundaries() {
             now(),
         )
         .unwrap();
-    for hour in 1..12 {
+    for minutes in (20..(12 * 60)).step_by(20) {
         manager
             .authenticate(
                 absolute.token(),
                 Some(absolute.csrf_token()),
                 true,
-                now() + Duration::hours(hour),
+                now() + Duration::minutes(minutes),
             )
             .unwrap();
     }
