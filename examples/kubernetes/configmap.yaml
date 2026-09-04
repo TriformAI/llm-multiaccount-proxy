@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llmap-config
+data:
+  llmap.toml: |
+    [server]
+    bind = "0.0.0.0:8080"
+    max_request_bytes = 33554432
+    allowed_upstream_hosts = ["api.anthropic.com", "*.amazonaws.com"]
+
+    [forward_proxy]
+    enabled = false
+    bind = "0.0.0.0:8081"
+    ca_cert_path = "/var/lib/llmap/llmap-ca.pem"
+    ca_key_path = "/var/lib/llmap/llmap-ca-key.pem"
+    allowed_hosts = ["api.anthropic.com", "*.amazonaws.com"]
+
+    [auth]
+    mode = "observe"
+
+    [storage]
+    database_path = "/var/lib/llmap/llmap.db"
+    master_key_env = "LLMAP_MASTER_KEY"
+
+    [admin]
+    username = "admin"
+    bootstrap_password_env = "LLMAP_ADMIN_PASSWORD"
+    secure_cookies = true
+
+    [telemetry]
+    audit_retention_days = 30

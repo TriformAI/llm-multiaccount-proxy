@@ -1,0 +1,24 @@
+services:
+  llmap:
+    image: ghcr.io/triformai/llm-multiaccount-proxy:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8081:8081"
+    environment:
+      LLMAP_MASTER_KEY: "${LLMAP_MASTER_KEY:?set LLMAP_MASTER_KEY}"
+      LLMAP_ADMIN_PASSWORD: "${LLMAP_ADMIN_PASSWORD:?set LLMAP_ADMIN_PASSWORD}"
+      RUST_LOG: "llmap=info"
+      LLMAP_LOG_FORMAT: "json"
+    volumes:
+      - ./llmap.toml:/etc/llmap/llmap.toml:ro
+      - llmap-state:/var/lib/llmap
+    command: ["serve", "--config", "/etc/llmap/llmap.toml"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  llmap-state:

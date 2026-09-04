@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: llmap
+spec:
+  serviceName: llmap
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llmap
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: llmap
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: llmap
+          image: ghcr.io/triformai/llm-multiaccount-proxy:latest
+          imagePullPolicy: IfNotPresent
+          args: ["serve", "--config", "/etc/llmap/llmap.toml"]
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: forward, containerPort: 8081}
+          envFrom:
+            - secretRef: {name: llmap-secrets}
+          readinessProbe:
+            httpGet: {path: /ready, port: http}
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "2", memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: config, mountPath: /etc/llmap, readOnly: true}
+            - {name: state, mountPath: /var/lib/llmap}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          configMap: {name: llmap-config}
+        - name: tmp
+          emptyDir: {sizeLimit: 32Mi}
+  volumeClaimTemplates:
+    - metadata: {name: state}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests: {storage: 5Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llmap
+spec:
+  selector:
+    app.kubernetes.io/name: llmap
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+    - {name: forward, port: 8081, targetPort: forward}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: llmap
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llmap

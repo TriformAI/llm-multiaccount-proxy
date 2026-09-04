@@ -1,0 +1,34 @@
+[server]
+bind = "127.0.0.1:8080"
+max_request_bytes = 33554432
+allowed_upstream_hosts = [
+  "api.anthropic.com",
+  "*.amazonaws.com",
+]
+
+[forward_proxy]
+enabled = false
+bind = "127.0.0.1:8081"
+ca_cert_path = "state/llmap-ca.pem"
+ca_key_path = "state/llmap-ca-key.pem"
+allowed_hosts = [
+  "api.anthropic.com",
+  "*.amazonaws.com",
+]
+
+[auth]
+# off: no check; observe: measure failures but allow; enforce: require a token
+# belonging to any active configured account.
+mode = "observe"
+
+[storage]
+database_path = "state/llmap.db"
+master_key_env = "LLMAP_MASTER_KEY"
+
+[admin]
+username = "admin"
+bootstrap_password_env = "LLMAP_ADMIN_PASSWORD"
+secure_cookies = false # set true behind HTTPS
+
+[telemetry]
+audit_retention_days = 30
