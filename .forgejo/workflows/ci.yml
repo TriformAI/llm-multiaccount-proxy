@@ -1,0 +1,25 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: docker
+    container:
+      image: rust:1.85-bookworm
+    steps:
+      - name: Prepare checkout runtime
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends nodejs pkg-config
+          git config --global --add safe.directory '*'
+      - uses: actions/checkout@v4
+      - run: cargo test --all-features
+

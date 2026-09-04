@@ -1,0 +1,38 @@
+[package]
+name = "llm-multiaccount-proxy"
+version = "0.1.0-alpha.1"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "One Anthropic-compatible endpoint for LLM accounts you control"
+repository = "https://github.com/TriformAI/llm-multiaccount-proxy"
+homepage = "https://github.com/TriformAI/llm-multiaccount-proxy"
+readme = "README.md"
+keywords = ["anthropic", "proxy", "llm", "claude"]
+categories = ["network-programming", "web-programming"]
+
+[lib]
+name = "llmap"
+path = "src/lib.rs"
+
+[[bin]]
+name = "llmap"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { version = "0.4.41", default-features = false, features = ["clock", "serde", "std"] }
+hmac = "0.12.1"
+serde = { version = "1.0.219", features = ["derive"] }
+sha2 = "0.10.9"
+subtle = "2.6.1"
+thiserror = "2.0.12"
+toml = "0.8.22"
+url = { version = "2.5.4", features = ["serde"] }
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
+
