@@ -30,8 +30,8 @@ fn account(id: &str) -> ProviderAccount {
 #[tokio::test]
 async fn account_management_redacts_credentials_and_pause_invalidates_auth_immediately() {
     let directory = tempfile::tempdir().unwrap();
-    let store =
-        SqliteStore::open(&directory.path().join("llmap.db"), SecretBox::new([51; 32])).unwrap();
+    let database = directory.path().join("llmap.db");
+    let store = SqliteStore::open(&database, SecretBox::new([51; 32])).unwrap();
     store
         .upsert_account(&account("a"), &SecretInput::new("fake-account-token"))
         .unwrap();
@@ -50,6 +50,15 @@ async fn account_management_redacts_credentials_and_pause_invalidates_auth_immed
             .unwrap()
             .contains("fake-account-token")
     );
+    let database_bytes = std::fs::read(&database).unwrap();
+    for sensitive in ["fake-pass", "fake-user", "fake-account-token"] {
+        assert!(
+            !database_bytes
+                .windows(sensitive.len())
+                .any(|window| window == sensitive.as_bytes()),
+            "SQLite must not contain residential-proxy or provider credentials"
+        );
+    }
 
     store.set_account_enabled("a", false).unwrap();
     let authenticator = Authenticator::new([52; 32]);
