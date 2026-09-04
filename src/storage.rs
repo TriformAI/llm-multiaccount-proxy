@@ -705,6 +705,17 @@ struct OAuthTokenResponse {
     refresh_token: Option<String>,
 }
 
+#[derive(serde::Serialize)]
+struct OAuthRefreshRequest<'a> {
+    grant_type: &'static str,
+    refresh_token: &'a str,
+    client_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_secret: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<&'a str>,
+}
+
 impl Drop for OAuthTokenResponse {
     fn drop(&mut self) {
         self.access_token.zeroize();
@@ -727,26 +738,16 @@ async fn refresh_oauth_candidate(
         builder = builder.proxy(reqwest::Proxy::all(proxy.as_url().as_str()).map_err(|_| ())?);
     }
     let client = builder.build().map_err(|_| ())?;
-    let mut form = vec![
-        ("grant_type", "refresh_token"),
-        (
-            "refresh_token",
-            candidate.envelope.refresh_token.as_deref().ok_or(())?,
-        ),
-        (
-            "client_id",
-            candidate.envelope.client_id.as_deref().ok_or(())?,
-        ),
-    ];
-    if let Some(client_secret) = candidate.envelope.client_secret.as_deref() {
-        form.push(("client_secret", client_secret));
-    }
-    if let Some(scope) = candidate.envelope.scope.as_deref() {
-        form.push(("scope", scope));
-    }
+    let refresh_request = OAuthRefreshRequest {
+        grant_type: "refresh_token",
+        refresh_token: candidate.envelope.refresh_token.as_deref().ok_or(())?,
+        client_id: candidate.envelope.client_id.as_deref().ok_or(())?,
+        client_secret: candidate.envelope.client_secret.as_deref(),
+        scope: candidate.envelope.scope.as_deref(),
+    };
     let response = client
         .post(endpoint.clone())
-        .form(&form)
+        .json(&refresh_request)
         .send()
         .await
         .map_err(|_| ())?;
@@ -770,6 +771,8 @@ fn oauth_endpoint_allowed(endpoint: &url::Url) -> bool {
     endpoint.host_str().is_some_and(|host| {
         host == "anthropic.com"
             || host.ends_with(".anthropic.com")
+            || host == "claude.com"
+            || host.ends_with(".claude.com")
             || host == "claude.ai"
             || host.ends_with(".claude.ai")
     })
@@ -791,4 +794,43 @@ fn decoded_credential(
         std::mem::take(&mut envelope.access_token),
         envelope.expires_at,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::oauth_endpoint_allowed;
+
+    #[test]
+    fn oauth_refresh_hosts_cover_supported_claude_endpoints_only() {
+        for endpoint in [
+            "https://console.anthropic.com/oauth/token",
+            "https://platform.claude.com/v1/oauth/token",
+            "https://claude.ai/api/oauth/token",
+        ] {
+            assert!(oauth_endpoint_allowed(&url::Url::parse(endpoint).unwrap()));
+        }
+        for endpoint in [
+            "http://platform.claude.com/v1/oauth/token",
+            "https://claude.com.attacker.example/token",
+            "https://anthropic.com.attacker.example/token",
+        ] {
+            let endpoint = url::Url::parse(endpoint).unwrap();
+            assert!(endpoint.scheme() != "https" || !oauth_endpoint_allowed(&endpoint));
+        }
+    }
+
+    #[test]
+    fn oauth_refresh_request_uses_json_shape() {
+        let request = super::OAuthRefreshRequest {
+            grant_type: "refresh_token",
+            refresh_token: "fake-refresh",
+            client_id: "fake-client",
+            client_secret: None,
+            scope: Some("user:profile user:inference"),
+        };
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["grant_type"], "refresh_token");
+        assert_eq!(value["refresh_token"], "fake-refresh");
+        assert!(value.get("client_secret").is_none());
+    }
 }

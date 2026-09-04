@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
-use axum::http::Method;
+use axum::{body::Body, http::Method};
 use chrono::{TimeZone, Utc};
 use llmap::providers::{
     ProviderAccount, ProviderKind, decode_bedrock_frame, finalize_request_auth, prepare_request,
-    prepare_request_for_stream,
+    prepare_request_for_stream, translate_bedrock_eventstream,
 };
 use llmap::secrets::SecretInput;
 use url::Url;
@@ -46,8 +46,8 @@ fn bedrock_api_key_uses_native_invoke_path() {
     );
 }
 
-#[test]
-fn bedrock_stream_path_and_event_frames_translate_to_anthropic_sse() {
+#[tokio::test]
+async fn bedrock_stream_path_and_event_frames_translate_to_anthropic_sse() {
     let prepared = prepare_request_for_stream(
         &account(ProviderKind::BedrockApiKey),
         &SecretInput::new("fake-bedrock-bearer"),
@@ -90,6 +90,10 @@ fn bedrock_stream_path_and_event_frames_translate_to_anthropic_sse() {
             String::from_utf8_lossy(anthropic_event)
         )
     );
+
+    let translated = translate_bedrock_eventstream(Body::from(frame));
+    let translated = axum::body::to_bytes(translated, 1024).await.unwrap();
+    assert_eq!(translated, sse);
 }
 
 #[test]

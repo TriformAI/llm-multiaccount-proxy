@@ -235,48 +235,57 @@ pub fn decode_bedrock_frame(frame: &[u8]) -> Result<Bytes, ProviderError> {
 }
 
 pub fn translate_bedrock_eventstream(body: Body) -> Body {
-    let output = async_stream::try_stream! {
+    let output = async_stream::stream! {
         use futures_util::StreamExt;
 
-        Ok::<(), std::io::Error>(())?;
         let mut input = body.into_data_stream();
         let mut buffer = BytesMut::new();
-        loop {
+        let mut failed = false;
+        'read: loop {
             while buffer.len() >= 4 {
-                let total_length = u32::from_be_bytes(
-                    buffer[..4]
-                        .try_into()
-                        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid Bedrock frame"))?,
-                ) as usize;
+                let total_length = u32::from_be_bytes([
+                    buffer[0], buffer[1], buffer[2], buffer[3],
+                ]) as usize;
                 if !(16..=16 * 1024 * 1024).contains(&total_length) {
-                    Err(std::io::Error::new(
+                    yield Err::<Bytes, std::io::Error>(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "invalid Bedrock event-stream frame length",
-                    ))?;
+                    ));
+                    failed = true;
+                    break 'read;
                 }
                 if buffer.len() < total_length {
                     break;
                 }
                 let frame = buffer.split_to(total_length).freeze();
-                let sse = decode_bedrock_frame(&frame).map_err(|_| {
-                    std::io::Error::new(
+                let sse = match decode_bedrock_frame(&frame) {
+                    Ok(sse) => sse,
+                    Err(_) => {
+                        yield Err::<Bytes, std::io::Error>(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "invalid Bedrock event-stream frame",
-                    )
-                })?;
-                yield sse;
+                        ));
+                        failed = true;
+                        break 'read;
+                    }
+                };
+                yield Ok::<Bytes, std::io::Error>(sse);
             }
             match input.next().await {
                 Some(Ok(chunk)) => buffer.extend_from_slice(&chunk),
-                Some(Err(error)) => Err(std::io::Error::other(error.to_string()))?,
+                Some(Err(error)) => {
+                    yield Err::<Bytes, std::io::Error>(std::io::Error::other(error.to_string()));
+                    failed = true;
+                    break;
+                }
                 None => break,
             }
         }
-        if !buffer.is_empty() {
-            Err(std::io::Error::new(
+        if !failed && !buffer.is_empty() {
+            yield Err::<Bytes, std::io::Error>(std::io::Error::new(
                 std::io::ErrorKind::UnexpectedEof,
                 "truncated Bedrock event stream",
-            ))?;
+            ));
         }
     };
     Body::from_stream(output)
