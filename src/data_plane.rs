@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -8,6 +9,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use bytes::Bytes;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use futures_util::TryStreamExt;
+use parking_lot::Mutex as ParkingMutex;
 use reqwest::redirect::Policy;
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -15,7 +17,7 @@ use url::Url;
 use zeroize::Zeroizing;
 
 use crate::auth::{AuthError, Authenticator, CredentialSnapshot};
-use crate::egress::{DestinationPolicy, ProxyEndpoint};
+use crate::egress::{DestinationPolicy, ProxyChain, ProxyEndpoint};
 use crate::providers::{ProviderAccount, prepare_request};
 use crate::routing::{RouteRequest, Router, UpstreamOutcome};
 use crate::secrets::SecretInput;
@@ -286,11 +288,62 @@ impl DataPlane {
 
 pub struct ReqwestTransport {
     destination_policy: DestinationPolicy,
+    proxy_chains: ParkingMutex<HashMap<String, AccountProxyChain>>,
+}
+
+struct AccountProxyChain {
+    sources: Vec<String>,
+    chain: ProxyChain,
 }
 
 impl ReqwestTransport {
     pub fn new(destination_policy: DestinationPolicy) -> Self {
-        Self { destination_policy }
+        Self {
+            destination_policy,
+            proxy_chains: ParkingMutex::new(HashMap::new()),
+        }
+    }
+
+    fn selected_proxy(
+        &self,
+        account_id: &str,
+        sources: &[String],
+    ) -> Result<Option<ProxyEndpoint>, TransportError> {
+        if sources.is_empty() {
+            self.proxy_chains.lock().remove(account_id);
+            return Ok(None);
+        }
+        let mut chains = self.proxy_chains.lock();
+        let needs_rebuild = chains
+            .get(account_id)
+            .is_none_or(|existing| existing.sources != sources);
+        if needs_rebuild {
+            let endpoints = sources
+                .iter()
+                .map(|source| ProxyEndpoint::parse(source))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| TransportError)?;
+            chains.insert(
+                account_id.to_owned(),
+                AccountProxyChain {
+                    sources: sources.to_vec(),
+                    chain: ProxyChain::new(endpoints).map_err(|_| TransportError)?,
+                },
+            );
+        }
+        Ok(chains
+            .get(account_id)
+            .map(|state| state.chain.active().clone()))
+    }
+
+    fn record_transport_result(&self, account_id: &str, success: bool) {
+        if let Some(state) = self.proxy_chains.lock().get_mut(account_id) {
+            if success {
+                state.chain.record_success();
+            } else {
+                state.chain.record_failure();
+            }
+        }
     }
 }
 
@@ -300,17 +353,23 @@ impl UpstreamTransport for ReqwestTransport {
         self.destination_policy
             .authorize(&request.url)
             .map_err(|_| TransportError)?;
+        let selected_proxy = self.selected_proxy(&request.account_id, &request.egress_proxies)?;
         let mut client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(15))
             .http2_adaptive_window(true)
             .redirect(Policy::none());
-        if let Some(proxy) = request.egress_proxies.first() {
-            let endpoint = ProxyEndpoint::parse(proxy).map_err(|_| TransportError)?;
+        if let Some(endpoint) = selected_proxy {
             client = client.proxy(
                 reqwest::Proxy::all(endpoint.as_url().as_str()).map_err(|_| TransportError)?,
             );
         }
-        let client = client.build().map_err(|_| TransportError)?;
+        let client = match client.build() {
+            Ok(client) => client,
+            Err(_) => {
+                self.record_transport_result(&request.account_id, false);
+                return Err(TransportError);
+            }
+        };
         let mut outbound = client
             .request(request.method, request.url)
             .body(request.body);
@@ -319,7 +378,14 @@ impl UpstreamTransport for ReqwestTransport {
             let value = HeaderValue::from_str(value.as_str()).map_err(|_| TransportError)?;
             outbound = outbound.header(name, value);
         }
-        let response = outbound.send().await.map_err(|_| TransportError)?;
+        let response = match outbound.send().await {
+            Ok(response) => response,
+            Err(_) => {
+                self.record_transport_result(&request.account_id, false);
+                return Err(TransportError);
+            }
+        };
+        self.record_transport_result(&request.account_id, true);
         let status = response.status();
         let headers = response.headers().clone();
         let body = Body::from_stream(response.bytes_stream().map_err(std::io::Error::other));
@@ -449,4 +515,41 @@ fn retry_after(headers: &HeaderMap, fallback_seconds: i64) -> ChronoDuration {
         .filter(|seconds| (1..=3600).contains(seconds))
         .unwrap_or(fallback_seconds);
     ChronoDuration::seconds(seconds)
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+
+    #[test]
+    fn configured_proxy_failover_changes_only_subsequent_requests() {
+        let transport = ReqwestTransport::new(DestinationPolicy::new(
+            vec!["api.anthropic.com".into()],
+            false,
+        ));
+        let sources = vec![
+            "socks5h://fake-user:fake-pass@res-a.invalid:1080".into(),
+            "https://res-b.invalid:8443".into(),
+        ];
+
+        assert_eq!(
+            transport
+                .selected_proxy("account-a", &sources)
+                .unwrap()
+                .unwrap()
+                .redacted_authority(),
+            "socks5h://res-a.invalid:1080"
+        );
+        for _ in 0..3 {
+            transport.record_transport_result("account-a", false);
+        }
+        assert_eq!(
+            transport
+                .selected_proxy("account-a", &sources)
+                .unwrap()
+                .unwrap()
+                .redacted_authority(),
+            "https://res-b.invalid:8443"
+        );
+    }
 }
