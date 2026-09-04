@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use llmap::providers::{ProviderAccount, ProviderError, ProviderKind, prepare_request};
+use llmap::providers::{ProviderAccount, ProviderKind, prepare_request};
 use llmap::secrets::{AdminPasswordHash, SecretBox, SecretInput};
 use llmap::storage::SqliteStore;
 use url::Url;
@@ -100,10 +100,9 @@ fn provider_adapters_rewrite_model_and_own_upstream_authentication() {
     );
 
     let sigv4 = account(ProviderKind::BedrockSigV4);
-    assert_eq!(
-        prepare_request(&sigv4, &credential, "/model/x/invoke", "claude-default").unwrap_err(),
-        ProviderError::AwsSigningRequired
-    );
+    let prepared = prepare_request(&sigv4, &credential, "/v1/messages", "claude-default").unwrap();
+    assert_eq!(prepared.url.path(), "/model/claude-sonnet-4-5/invoke");
+    assert!(prepared.header("authorization").is_none());
 }
 
 #[test]
