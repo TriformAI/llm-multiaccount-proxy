@@ -278,6 +278,10 @@ impl DataPlane {
             body: upstream.body,
         })
     }
+
+    pub async fn replace_route_accounts(&self, accounts: Vec<crate::routing::RouteAccount>) {
+        self.router.lock().await.replace_accounts(accounts);
+    }
 }
 
 pub struct ReqwestTransport {

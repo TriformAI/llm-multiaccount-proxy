@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use async_trait::async_trait;
@@ -10,6 +11,7 @@ use crate::auth::{AccountCredential, Authenticator, CredentialSnapshot};
 use crate::data_plane::{AccountRepository, RepositoryError};
 use crate::egress::ProxyEndpoint;
 use crate::providers::ProviderAccount;
+use crate::routing::RouteAccount;
 use crate::secrets::{SecretBox, SecretError, SecretInput};
 
 #[derive(Clone, Debug, serde::Serialize, Eq, PartialEq)]
@@ -190,6 +192,33 @@ impl SqliteStore {
             })
         })
         .collect()
+    }
+
+    pub fn route_accounts(&self) -> Result<Vec<RouteAccount>, StorageError> {
+        self.list_accounts().map(|accounts| {
+            accounts
+                .into_iter()
+                .map(|account| RouteAccount {
+                    id: account.id,
+                    provider: match account.provider {
+                        crate::providers::ProviderKind::ClaudeOauth => "claude_oauth",
+                        crate::providers::ProviderKind::AnthropicApiKey => "anthropic_api_key",
+                        crate::providers::ProviderKind::BedrockApiKey => "bedrock_api_key",
+                        crate::providers::ProviderKind::BedrockSigV4 => "bedrock_sig_v4",
+                        crate::providers::ProviderKind::AnthropicCompatible => {
+                            "anthropic_compatible"
+                        }
+                    }
+                    .into(),
+                    enabled: account.enabled,
+                    healthy: true,
+                    in_flight: 0,
+                    utilization_basis_points: 0,
+                    models: HashSet::from_iter(account.models),
+                    depleted_until: None,
+                })
+                .collect()
+        })
     }
 
     pub fn set_account_enabled(&self, account_id: &str, enabled: bool) -> Result<(), StorageError> {

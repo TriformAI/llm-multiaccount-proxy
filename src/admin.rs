@@ -221,6 +221,33 @@ impl AdminSessionManager {
             .remove(&self.digest(session_token));
     }
 
+    pub fn issue_csrf(
+        &self,
+        session_token: &str,
+        now: DateTime<Utc>,
+    ) -> Result<SecretInput, AdminAuthError> {
+        self.authenticate(session_token, None, false, now)?;
+        let csrf_token = random_token();
+        let session_digest = self.digest(session_token);
+        let csrf_digest = self.digest(csrf_token.expose());
+        let mut state = self.state.lock();
+        let session = state
+            .sessions
+            .get_mut(&session_digest)
+            .ok_or(AdminAuthError::InvalidSession)?;
+        session.csrf_digest = csrf_digest;
+        Ok(csrf_token)
+    }
+
+    pub fn active_session_count(&self, now: DateTime<Utc>) -> usize {
+        let mut state = self.state.lock();
+        state.sessions.retain(|_, session| {
+            now < session.created_at + self.policy.absolute_timeout
+                && now <= session.last_seen_at + self.policy.idle_timeout
+        });
+        state.sessions.len()
+    }
+
     fn digest(&self, value: &str) -> [u8; 32] {
         type HmacSha256 = Hmac<Sha256>;
         let mut mac = HmacSha256::new_from_slice(&self.digest_key)

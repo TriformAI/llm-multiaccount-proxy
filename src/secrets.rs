@@ -77,14 +77,7 @@ impl SecretBox {
     }
 
     pub fn from_base64(encoded: &str) -> Result<Self, SecretError> {
-        let decoded = STANDARD
-            .decode(encoded.trim())
-            .or_else(|_| URL_SAFE_NO_PAD.decode(encoded.trim()))
-            .map_err(|_| SecretError::InvalidMasterKey)?;
-        let key: [u8; 32] = decoded
-            .try_into()
-            .map_err(|_| SecretError::InvalidMasterKey)?;
-        Ok(Self::new(key))
+        Ok(Self::new(parse_master_key(encoded)?))
     }
 
     pub fn encrypt(
@@ -146,6 +139,16 @@ impl SecretBox {
         })?;
         Ok(Zeroizing::new(plaintext))
     }
+}
+
+pub fn parse_master_key(encoded: &str) -> Result<[u8; 32], SecretError> {
+    let decoded = STANDARD
+        .decode(encoded.trim())
+        .or_else(|_| URL_SAFE_NO_PAD.decode(encoded.trim()))
+        .map_err(|_| SecretError::InvalidMasterKey)?;
+    decoded
+        .try_into()
+        .map_err(|_| SecretError::InvalidMasterKey)
 }
 
 #[derive(Clone, Eq, PartialEq)]

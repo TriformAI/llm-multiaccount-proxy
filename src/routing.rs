@@ -84,6 +84,16 @@ impl Router {
         }
     }
 
+    pub fn replace_accounts(&mut self, accounts: Vec<RouteAccount>) {
+        let replacement: HashMap<_, _> = accounts
+            .into_iter()
+            .map(|account| (account.id.clone(), account))
+            .collect();
+        self.sessions
+            .retain(|_, account_id| replacement.contains_key(account_id));
+        self.accounts = replacement;
+    }
+
     pub fn choose(
         &mut self,
         request: &RouteRequest,
