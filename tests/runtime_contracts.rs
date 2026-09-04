@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode};
 use chrono::Utc;
 use http_body_util::BodyExt;
@@ -106,6 +107,7 @@ async fn branded_admin_session_can_create_a_redacted_routable_account() {
         .clone()
         .oneshot(
             Request::post("/admin/api/v1/login")
+                .extension(ConnectInfo("127.0.0.1:40000".parse().unwrap()))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     r#"{"username":"operator","password":"fake-admin-password"}"#,

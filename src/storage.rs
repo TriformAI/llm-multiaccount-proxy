@@ -71,6 +71,7 @@ impl SqliteStore {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "busy_timeout", 5_000)?;
+        connection.pragma_update(None, "secure_delete", "ON")?;
         connection.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_migrations (
                  version INTEGER PRIMARY KEY,
@@ -133,7 +134,13 @@ impl SqliteStore {
             connection: Mutex::new(connection),
             secret_box,
         };
-        store.encrypt_legacy_egress_metadata()?;
+        if store.encrypt_legacy_egress_metadata()? > 0 {
+            store.connection.lock().execute_batch(
+                "PRAGMA wal_checkpoint(TRUNCATE);
+                 VACUUM;
+                 PRAGMA wal_checkpoint(TRUNCATE);",
+            )?;
+        }
         Ok(store)
     }
 
@@ -447,7 +454,7 @@ impl SqliteStore {
         Ok(())
     }
 
-    fn encrypt_legacy_egress_metadata(&self) -> Result<(), StorageError> {
+    fn encrypt_legacy_egress_metadata(&self) -> Result<usize, StorageError> {
         let rows = {
             let connection = self.connection.lock();
             let mut statement = connection.prepare(
@@ -459,6 +466,7 @@ impl SqliteStore {
             })?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
+        let migrated = rows.len();
         for (id, account_json) in rows {
             let account: ProviderAccount = serde_json::from_str(&account_json)
                 .map_err(|error| StorageError::InvalidAccount(error.to_string()))?;
@@ -470,7 +478,7 @@ impl SqliteStore {
                 rusqlite::params![id, redacted_json, encrypted_egress],
             )?;
         }
-        Ok(())
+        Ok(migrated)
     }
 
     pub fn journal_mode(&self) -> Result<String, StorageError> {

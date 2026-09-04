@@ -73,6 +73,55 @@ fn sqlite_uses_wal_and_never_persists_plaintext_credentials() {
 }
 
 #[test]
+fn opening_legacy_sqlite_encrypts_and_scrubs_plaintext_proxy_userinfo() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("legacy.db");
+    let account_json = serde_json::to_string(&ProviderAccount {
+        egress_proxies: vec![
+            "socks5h://fake-legacy-user:fake-legacy-pass@residential.invalid:1080".into(),
+        ],
+        ..account(ProviderKind::ClaudeOauth)
+    })
+    .unwrap();
+    let legacy = rusqlite::Connection::open(&database).unwrap();
+    legacy
+        .execute_batch(
+            "CREATE TABLE provider_accounts (
+                id TEXT PRIMARY KEY,
+                account_json TEXT NOT NULL,
+                credential_ciphertext TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+    legacy
+        .execute(
+            "INSERT INTO provider_accounts VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params!["account-01", account_json, "legacy-ciphertext", "now"],
+        )
+        .unwrap();
+    drop(legacy);
+
+    let store = SqliteStore::open(&database, SecretBox::new([29; 32])).unwrap();
+    assert_eq!(
+        store.list_accounts().unwrap()[0].egress,
+        vec!["socks5h://residential.invalid:1080"]
+    );
+    drop(store);
+    for candidate in [database.clone(), database.with_extension("db-wal")] {
+        if let Ok(bytes) = std::fs::read(candidate) {
+            for secret in ["fake-legacy-user", "fake-legacy-pass"] {
+                assert!(
+                    !bytes
+                        .windows(secret.len())
+                        .any(|window| window == secret.as_bytes())
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn provider_adapters_rewrite_model_and_own_upstream_authentication() {
     let credential = SecretInput::new("fake-upstream-token");
     let anthropic = account(ProviderKind::AnthropicApiKey);

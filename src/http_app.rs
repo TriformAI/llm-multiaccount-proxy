@@ -137,13 +137,11 @@ struct LoginInput {
 }
 
 async fn admin_login_api(
-    peer: Option<ConnectInfo<std::net::SocketAddr>>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     State(state): State<AdminState>,
     Json(input): Json<LoginInput>,
 ) -> Response {
-    let client_key = peer
-        .map(|ConnectInfo(address)| address.ip().to_string())
-        .unwrap_or_else(|| "direct-router-test".into());
+    let client_key = peer.ip().to_string();
     let password = SecretInput::new(input.password);
     match state
         .sessions

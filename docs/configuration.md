@@ -10,7 +10,7 @@ misspelled security setting cannot silently fall back to a default.
 |---|---|---|
 | `bind` | Reverse proxy, admin, health, and metrics socket | required |
 | `max_request_bytes` | Buffered client request limit, 1 byte to 256 MiB | 32 MiB |
-| `allowed_upstream_hosts` | Exact hosts or leading-wildcard suffixes the data plane may call | Anthropic and Bedrock defaults |
+| `allowed_upstream_hosts` | Exact hosts or whole-label wildcard patterns the data plane may call | Anthropic and Bedrock defaults |
 
 Bind to loopback unless a trusted ingress provides TLS and network policy.
 Provider base URLs must be HTTPS and contain no userinfo.
@@ -39,6 +39,8 @@ it to `false`.
 `enabled` controls whether the second listener starts. `bind`, `ca_cert_path`,
 and `ca_key_path` define that listener and its local CA. `allowed_hosts` is an
 independent CONNECT allowlist. Forward and reverse sockets must differ.
+Use `bedrock-runtime.*.amazonaws.com` for regional Bedrock Runtime endpoints;
+avoid the broader `*.amazonaws.com` pattern.
 
 ## `[telemetry]`
 
