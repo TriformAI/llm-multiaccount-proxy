@@ -100,6 +100,15 @@ fn sqlite_backup_restores_with_the_external_key_and_contains_no_plaintext_secret
 
     store.backup_to(&backup).unwrap();
     assert!(store.backup_to(&backup).is_err());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        assert_eq!(
+            std::fs::metadata(&backup).unwrap().permissions().mode() & 0o077,
+            0
+        );
+    }
     drop(store);
 
     let backup_bytes = std::fs::read(&backup).unwrap();
