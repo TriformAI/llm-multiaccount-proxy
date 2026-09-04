@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -47,14 +48,70 @@ pub enum ConfigError {
 
 impl Config {
     pub fn from_toml_with_env(
-        _source: &str,
-        _environment: &BTreeMap<String, String>,
+        source: &str,
+        environment: &BTreeMap<String, String>,
     ) -> Result<Self, ConfigError> {
-        unimplemented!("RED: configuration loading")
+        let mut config: Self =
+            toml::from_str(source).map_err(|error| ConfigError::Parse(error.to_string()))?;
+        if let Some(mode) = environment.get("LLMAP_AUTH_MODE") {
+            config.auth.mode = match mode.trim().to_ascii_lowercase().as_str() {
+                "off" => AuthMode::Off,
+                "observe" => AuthMode::Observe,
+                "enforce" => AuthMode::Enforce,
+                _ => {
+                    return Err(ConfigError::Invalid(
+                        "LLMAP_AUTH_MODE must be off, observe, or enforce".into(),
+                    ));
+                }
+            };
+            config.auth.mode_locked_by_environment = true;
+        }
+        config.validate()?;
+        Ok(config)
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
-        let _ = self;
-        unimplemented!("RED: configuration validation")
+        self.server
+            .bind
+            .parse::<SocketAddr>()
+            .map_err(|_| ConfigError::Invalid("server.bind must be an IP socket address".into()))?;
+        require_value("storage.database_path", &self.storage.database_path)?;
+        require_env_name("storage.master_key_env", &self.storage.master_key_env)?;
+        require_value("admin.username", &self.admin.username)?;
+        require_env_name(
+            "admin.bootstrap_password_env",
+            &self.admin.bootstrap_password_env,
+        )?;
+        if self.storage.master_key_env == self.admin.bootstrap_password_env {
+            return Err(ConfigError::Invalid(
+                "master key and admin password must use different environment variables".into(),
+            ));
+        }
+        Ok(())
     }
+}
+
+fn require_value(field: &str, value: &str) -> Result<(), ConfigError> {
+    if value.trim().is_empty() {
+        return Err(ConfigError::Invalid(format!("{field} cannot be empty")));
+    }
+    Ok(())
+}
+
+fn require_env_name(field: &str, value: &str) -> Result<(), ConfigError> {
+    require_value(field, value)?;
+    let valid = value
+        .chars()
+        .enumerate()
+        .all(|(index, character)| match character {
+            'A'..='Z' | '_' => true,
+            '0'..='9' => index > 0,
+            _ => false,
+        });
+    if !valid {
+        return Err(ConfigError::Invalid(format!(
+            "{field} must name an uppercase environment variable"
+        )));
+    }
+    Ok(())
 }

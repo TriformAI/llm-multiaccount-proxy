@@ -1,5 +1,8 @@
 use chrono::{DateTime, Utc};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
+use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -27,20 +30,32 @@ pub struct AccountCredential {
 
 impl AccountCredential {
     pub fn active(
-        _authenticator: &Authenticator,
-        _account_id: impl Into<String>,
-        _token: &str,
+        authenticator: &Authenticator,
+        account_id: impl Into<String>,
+        token: &str,
     ) -> Self {
-        unimplemented!("RED: credential construction")
+        Self {
+            account_id: account_id.into(),
+            active: true,
+            current: CredentialVersion {
+                digest: authenticator.digest(token),
+                expires_at: None,
+            },
+            previous: Vec::new(),
+        }
     }
 
     pub fn with_previous(
         self,
-        _authenticator: &Authenticator,
-        _token: &str,
-        _expires_at: DateTime<Utc>,
+        authenticator: &Authenticator,
+        token: &str,
+        expires_at: DateTime<Utc>,
     ) -> Self {
-        unimplemented!("RED: credential rotation")
+        self.previous.push(CredentialVersion {
+            digest: authenticator.digest(token),
+            expires_at: Some(expires_at),
+        });
+        self
     }
 
     pub fn paused(mut self) -> Self {
@@ -82,12 +97,74 @@ impl Authenticator {
 
     pub fn authorize(
         &self,
-        _mode: AuthMode,
-        _presented_token: Option<&str>,
-        _snapshot: &CredentialSnapshot,
-        _now: DateTime<Utc>,
+        mode: AuthMode,
+        presented_token: Option<&str>,
+        snapshot: &CredentialSnapshot,
+        now: DateTime<Utc>,
     ) -> Result<AuthDecision, AuthError> {
-        let _ = self.digest_key;
-        unimplemented!("RED: configurable client authentication")
+        if mode == AuthMode::Off {
+            return Ok(AuthDecision {
+                allowed: true,
+                observed_failure: false,
+                matched_account_id: None,
+            });
+        }
+
+        let CredentialSnapshot::Available(accounts) = snapshot else {
+            return match mode {
+                AuthMode::Observe => Ok(AuthDecision {
+                    allowed: true,
+                    observed_failure: true,
+                    matched_account_id: None,
+                }),
+                AuthMode::Enforce => Err(AuthError::CredentialStoreUnavailable),
+                AuthMode::Off => unreachable!("off mode returns before reading the store"),
+            };
+        };
+
+        // Hash even a missing token and scan every configured digest. This
+        // keeps the observable path for missing, unknown, and expired tokens
+        // deliberately similar and never compares secret strings directly.
+        let presented_digest = self.digest(presented_token.unwrap_or_default());
+        let mut matched_account_id = None;
+        for account in accounts {
+            let current_match = presented_digest.ct_eq(&account.current.digest);
+            if account.active && bool::from(current_match) {
+                matched_account_id = Some(account.account_id.clone());
+            }
+            for previous in &account.previous {
+                let not_expired = previous.expires_at.is_none_or(|expiry| expiry > now);
+                let previous_match = presented_digest.ct_eq(&previous.digest);
+                if account.active && not_expired && bool::from(previous_match) {
+                    matched_account_id = Some(account.account_id.clone());
+                }
+            }
+        }
+
+        if matched_account_id.is_some() {
+            return Ok(AuthDecision {
+                allowed: true,
+                observed_failure: false,
+                matched_account_id,
+            });
+        }
+
+        match mode {
+            AuthMode::Observe => Ok(AuthDecision {
+                allowed: true,
+                observed_failure: true,
+                matched_account_id: None,
+            }),
+            AuthMode::Enforce => Err(AuthError::Unauthorized),
+            AuthMode::Off => unreachable!("off mode returns before matching"),
+        }
+    }
+
+    fn digest(&self, token: &str) -> [u8; 32] {
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(&self.digest_key)
+            .expect("HMAC-SHA256 accepts a key of any length");
+        mac.update(token.as_bytes());
+        mac.finalize().into_bytes().into()
     }
 }

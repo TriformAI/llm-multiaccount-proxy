@@ -52,11 +52,20 @@ pub enum RetryDecision {
 }
 
 pub fn retry_decision(
-    _outcome: UpstreamOutcome,
-    _request_bytes_may_have_been_sent: bool,
-    _response_bytes_seen: bool,
+    outcome: UpstreamOutcome,
+    request_bytes_may_have_been_sent: bool,
+    response_bytes_seen: bool,
 ) -> RetryDecision {
-    unimplemented!("RED: streaming retry boundary")
+    if request_bytes_may_have_been_sent || response_bytes_seen {
+        return RetryDecision::ReturnFailure;
+    }
+    match outcome {
+        UpstreamOutcome::Unauthorized
+        | UpstreamOutcome::RateLimited { .. }
+        | UpstreamOutcome::Overloaded { .. }
+        | UpstreamOutcome::TransientFailure => RetryDecision::RetryAnotherAccount,
+        UpstreamOutcome::Success => RetryDecision::ReturnFailure,
+    }
 }
 
 pub struct Router {
@@ -77,18 +86,83 @@ impl Router {
 
     pub fn choose(
         &mut self,
-        _request: &RouteRequest,
-        _now: DateTime<Utc>,
+        request: &RouteRequest,
+        now: DateTime<Utc>,
     ) -> Result<RouteSelection, RouteError> {
-        let _ = (&self.accounts, &self.sessions);
-        unimplemented!("RED: sticky capacity routing")
+        if let Some(session_id) = request.session_id.as_deref() {
+            let bound_account = self.sessions.get(session_id).cloned();
+            if let Some(account) = bound_account
+                .as_ref()
+                .and_then(|account_id| self.accounts.get(account_id))
+            {
+                if eligible(account, &request.model, now) {
+                    return Ok(RouteSelection {
+                        account_id: account.id.clone(),
+                        provider: account.provider.clone(),
+                        reused_session: true,
+                    });
+                }
+            }
+        }
+
+        let account = self
+            .accounts
+            .values()
+            .filter(|account| eligible(account, &request.model, now))
+            .min_by(|left, right| {
+                left.utilization_basis_points
+                    .cmp(&right.utilization_basis_points)
+                    .then_with(|| left.in_flight.cmp(&right.in_flight))
+                    .then_with(|| left.id.cmp(&right.id))
+            })
+            .ok_or(RouteError::NoEligibleAccount)?;
+
+        if let Some(session_id) = &request.session_id {
+            self.sessions.insert(session_id.clone(), account.id.clone());
+        }
+        Ok(RouteSelection {
+            account_id: account.id.clone(),
+            provider: account.provider.clone(),
+            reused_session: false,
+        })
     }
 
     pub fn record_outcome(
         &mut self,
-        _account_id: &str,
-        _outcome: UpstreamOutcome,
+        account_id: &str,
+        outcome: UpstreamOutcome,
     ) -> Result<(), RouteError> {
-        unimplemented!("RED: upstream response classification")
+        let account = self
+            .accounts
+            .get_mut(account_id)
+            .ok_or(RouteError::UnknownAccount)?;
+        match outcome {
+            UpstreamOutcome::Success => {}
+            UpstreamOutcome::Unauthorized => {
+                account.healthy = false;
+                self.sessions
+                    .retain(|_, selected_account| selected_account != account_id);
+            }
+            UpstreamOutcome::RateLimited { retry_at }
+            | UpstreamOutcome::Overloaded { retry_at } => {
+                account.depleted_until = Some(retry_at);
+                self.sessions
+                    .retain(|_, selected_account| selected_account != account_id);
+            }
+            UpstreamOutcome::TransientFailure => {
+                self.sessions
+                    .retain(|_, selected_account| selected_account != account_id);
+            }
+        }
+        Ok(())
     }
+}
+
+fn eligible(account: &RouteAccount, model: &str, now: DateTime<Utc>) -> bool {
+    account.enabled
+        && account.healthy
+        && account
+            .depleted_until
+            .is_none_or(|depleted_until| depleted_until <= now)
+        && (account.models.is_empty() || account.models.contains(model))
 }
