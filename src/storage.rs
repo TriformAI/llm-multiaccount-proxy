@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use rusqlite::Connection;
 use thiserror::Error;
+use zeroize::Zeroize;
 
 use crate::auth::{AccountCredential, Authenticator, CredentialSnapshot};
 use crate::data_plane::{AccountRepository, ProxyAuditRecord, RepositoryError};
@@ -38,6 +39,13 @@ pub struct AuditEvent {
     pub status: Option<u16>,
     pub outcome: String,
     pub latency_ms: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
+pub struct OAuthRefreshSummary {
+    pub refreshed: usize,
+    pub skipped: usize,
+    pub failed: usize,
 }
 
 #[derive(Debug, Error)]
@@ -183,6 +191,140 @@ impl SqliteStore {
         )?;
         transaction.commit()?;
         Ok(())
+    }
+
+    pub async fn refresh_due_oauth(&self, now: DateTime<Utc>) -> OAuthRefreshSummary {
+        let candidates = match self.oauth_refresh_candidates(now) {
+            Ok(candidates) => candidates,
+            Err(_) => {
+                return OAuthRefreshSummary {
+                    failed: 1,
+                    ..OAuthRefreshSummary::default()
+                };
+            }
+        };
+        let mut summary = OAuthRefreshSummary::default();
+        for candidate in candidates {
+            if !candidate.due {
+                summary.skipped += 1;
+                continue;
+            }
+            match refresh_oauth_candidate(&candidate).await {
+                Ok(refreshed) => {
+                    let previous_valid_until = candidate
+                        .envelope
+                        .expires_at
+                        .unwrap_or(now + chrono::Duration::minutes(10))
+                        .min(now + chrono::Duration::minutes(10));
+                    match self.replace_oauth_if_current(
+                        &candidate,
+                        &refreshed,
+                        previous_valid_until,
+                    ) {
+                        Ok(true) => summary.refreshed += 1,
+                        Ok(false) => summary.skipped += 1,
+                        Err(_) => summary.failed += 1,
+                    }
+                }
+                Err(_) => summary.failed += 1,
+            }
+        }
+        summary
+    }
+
+    fn oauth_refresh_candidates(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<OAuthRefreshCandidate>, StorageError> {
+        let rows = {
+            let connection = self.connection.lock();
+            let mut statement = connection.prepare(
+                "SELECT account_json, credential_ciphertext
+                 FROM provider_accounts ORDER BY id",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        let mut candidates = Vec::new();
+        for (account_json, ciphertext) in rows {
+            let account: ProviderAccount = serde_json::from_str(&account_json)
+                .map_err(|error| StorageError::InvalidAccount(error.to_string()))?;
+            if account.kind != ProviderKind::ClaudeOauth || !account.enabled {
+                continue;
+            }
+            let associated_data = format!("account:{}", account.id);
+            let plaintext = self.secret_box.decrypt(
+                &crate::secrets::EncryptedSecret::from_storage_value(ciphertext.clone()),
+                associated_data.as_bytes(),
+            )?;
+            if !plaintext.trim_start().starts_with('{') {
+                continue;
+            }
+            let envelope: OAuthCredentialEnvelope = serde_json::from_str(plaintext.as_str())
+                .map_err(|error| StorageError::InvalidAccount(error.to_string()))?;
+            let due = envelope
+                .expires_at
+                .is_some_and(|expiry| expiry <= now + chrono::Duration::minutes(5))
+                && envelope.refresh_token.is_some()
+                && envelope.token_endpoint.is_some()
+                && envelope.client_id.is_some();
+            candidates.push(OAuthRefreshCandidate {
+                account,
+                expected_ciphertext: ciphertext,
+                envelope,
+                due,
+            });
+        }
+        Ok(candidates)
+    }
+
+    fn replace_oauth_if_current(
+        &self,
+        candidate: &OAuthRefreshCandidate,
+        refreshed: &OAuthCredentialEnvelope,
+        previous_valid_until: DateTime<Utc>,
+    ) -> Result<bool, StorageError> {
+        let plaintext = SecretInput::new(
+            serde_json::to_string(refreshed)
+                .map_err(|error| StorageError::InvalidAccount(error.to_string()))?,
+        );
+        let associated_data = format!("account:{}", candidate.account.id);
+        let encrypted = self
+            .secret_box
+            .encrypt(&plaintext, associated_data.as_bytes())?;
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        let changed = transaction.execute(
+            "UPDATE provider_accounts
+             SET credential_ciphertext = ?3,
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE id = ?1 AND credential_ciphertext = ?2",
+            rusqlite::params![
+                candidate.account.id,
+                candidate.expected_ciphertext,
+                encrypted.as_storage_value(),
+            ],
+        )?;
+        if changed == 0 {
+            transaction.rollback()?;
+            return Ok(false);
+        }
+        transaction.execute(
+            "INSERT INTO credential_history (account_id, credential_ciphertext, expires_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(account_id) DO UPDATE SET
+                 credential_ciphertext = excluded.credential_ciphertext,
+                 expires_at = excluded.expires_at",
+            rusqlite::params![
+                candidate.account.id,
+                candidate.expected_ciphertext,
+                previous_valid_until.to_rfc3339(),
+            ],
+        )?;
+        transaction.commit()?;
+        Ok(true)
     }
 
     pub fn load_account(
@@ -523,11 +665,114 @@ impl AccountRepository for SqliteStore {
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 struct OAuthCredentialEnvelope {
     access_token: String,
     #[serde(default)]
     expires_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    token_endpoint: Option<url::Url>,
+    #[serde(default)]
+    client_id: Option<String>,
+    #[serde(default)]
+    client_secret: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+impl Drop for OAuthCredentialEnvelope {
+    fn drop(&mut self) {
+        self.access_token.zeroize();
+        self.refresh_token.zeroize();
+        self.client_secret.zeroize();
+    }
+}
+
+struct OAuthRefreshCandidate {
+    account: ProviderAccount,
+    expected_ciphertext: String,
+    envelope: OAuthCredentialEnvelope,
+    due: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct OAuthTokenResponse {
+    access_token: String,
+    expires_in: u64,
+    #[serde(default)]
+    refresh_token: Option<String>,
+}
+
+impl Drop for OAuthTokenResponse {
+    fn drop(&mut self) {
+        self.access_token.zeroize();
+        self.refresh_token.zeroize();
+    }
+}
+
+async fn refresh_oauth_candidate(
+    candidate: &OAuthRefreshCandidate,
+) -> Result<OAuthCredentialEnvelope, ()> {
+    let endpoint = candidate.envelope.token_endpoint.as_ref().ok_or(())?;
+    if endpoint.scheme() != "https" || !oauth_endpoint_allowed(endpoint) {
+        return Err(());
+    }
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none());
+    if let Some(proxy) = candidate.account.egress_proxies.first() {
+        let proxy = ProxyEndpoint::parse(proxy).map_err(|_| ())?;
+        builder = builder.proxy(reqwest::Proxy::all(proxy.as_url().as_str()).map_err(|_| ())?);
+    }
+    let client = builder.build().map_err(|_| ())?;
+    let mut form = vec![
+        ("grant_type", "refresh_token"),
+        (
+            "refresh_token",
+            candidate.envelope.refresh_token.as_deref().ok_or(())?,
+        ),
+        (
+            "client_id",
+            candidate.envelope.client_id.as_deref().ok_or(())?,
+        ),
+    ];
+    if let Some(client_secret) = candidate.envelope.client_secret.as_deref() {
+        form.push(("client_secret", client_secret));
+    }
+    if let Some(scope) = candidate.envelope.scope.as_deref() {
+        form.push(("scope", scope));
+    }
+    let response = client
+        .post(endpoint.clone())
+        .form(&form)
+        .send()
+        .await
+        .map_err(|_| ())?;
+    if !response.status().is_success() {
+        return Err(());
+    }
+    let mut response: OAuthTokenResponse = response.json().await.map_err(|_| ())?;
+    if response.access_token.is_empty() || !(60..=86_400).contains(&response.expires_in) {
+        return Err(());
+    }
+    let mut refreshed = candidate.envelope.clone();
+    refreshed.access_token = std::mem::take(&mut response.access_token);
+    refreshed.expires_at = Some(Utc::now() + chrono::Duration::seconds(response.expires_in as i64));
+    if response.refresh_token.is_some() {
+        refreshed.refresh_token = std::mem::take(&mut response.refresh_token);
+    }
+    Ok(refreshed)
+}
+
+fn oauth_endpoint_allowed(endpoint: &url::Url) -> bool {
+    endpoint.host_str().is_some_and(|host| {
+        host == "anthropic.com"
+            || host.ends_with(".anthropic.com")
+            || host == "claude.ai"
+            || host.ends_with(".claude.ai")
+    })
 }
 
 fn decoded_credential(

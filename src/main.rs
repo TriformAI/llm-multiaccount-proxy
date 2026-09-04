@@ -142,6 +142,27 @@ async fn serve(config_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         session_key,
         SessionPolicy::default(),
     ));
+    let refresh_store = store.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let summary = refresh_store.refresh_due_oauth(chrono::Utc::now()).await;
+            if summary.refreshed > 0 {
+                info!(
+                    refreshed = summary.refreshed,
+                    "refreshed OAuth account credentials"
+                );
+            }
+            if summary.failed > 0 {
+                tracing::warn!(
+                    failed = summary.failed,
+                    "one or more OAuth credential refreshes failed"
+                );
+            }
+        }
+    });
     let app = application_router(
         data_plane.clone(),
         store,

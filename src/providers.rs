@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use url::Url;
+use zeroize::Zeroize;
 use zeroize::Zeroizing;
 
 use crate::secrets::SecretInput;
@@ -254,6 +255,13 @@ struct AwsCredentialEnvelope {
     region: String,
     #[serde(default)]
     service: Option<String>,
+}
+
+impl Drop for AwsCredentialEnvelope {
+    fn drop(&mut self) {
+        self.secret_access_key.zeroize();
+        self.session_token.zeroize();
+    }
 }
 
 impl AwsCredentialEnvelope {

@@ -27,11 +27,11 @@ allowlist whenever possible.
 
 ## Residual risks and GA gates
 
-DNS rebinding protection must pin or validate resolved addresses at connection
-time, not only validate configured host text. Native Bedrock SigV4 and streaming
-translation, automatic OAuth refresh overlap, external penetration testing,
-dependency review, and the 30-day canary soak remain first-GA gates. Track them
-in [GA readiness](ga-readiness.md).
+Native Bedrock event-stream translation, external penetration testing,
+dependency review, and the 30-day canary soak remain first-GA gates. Direct
+upstream DNS is resolved, checked, and pinned before connection; remote-DNS
+residential proxies are an explicit trusted egress boundary. Track the release
+gates in [GA readiness](ga-readiness.md).
 
 SQLite is a single-node boundary. Do not place multiple writers on a network
 filesystem. Backups and database copies are sensitive even though credential

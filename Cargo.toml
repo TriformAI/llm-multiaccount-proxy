@@ -42,7 +42,7 @@ sha2 = "0.10.9"
 subtle = "2.6.1"
 thiserror = "2.0.12"
 toml = "0.8.22"
-tokio = { version = "1.44.2", features = ["macros", "net", "rt-multi-thread", "signal", "sync"] }
+tokio = { version = "1.44.2", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt", "json"] }
 url = { version = "2.5.4", features = ["serde"] }

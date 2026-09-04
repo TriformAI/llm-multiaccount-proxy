@@ -16,9 +16,12 @@ not end-to-end proof.
   fallback.
 - [x] Branded session/CSRF administrator control plane and immediate
   pause/delete effect.
-- [ ] Automatic Claude OAuth refresh with bounded previous-token overlap.
+- [x] Automatic Claude OAuth refresh with bounded previous-token overlap and
+  compare-and-swap persistence.
 - [ ] Native Bedrock SigV4 vectors and Anthropic-to-Bedrock streaming parity.
-- [ ] DNS resolution pinning/rebinding tests for every outbound connection path.
+- [x] Upstream DNS resolution validation and address pinning before direct
+  connections; remote-DNS proxy chains remain inside the configured egress
+  trust boundary.
 
 ## Security and privacy
 
