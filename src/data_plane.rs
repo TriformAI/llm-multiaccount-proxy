@@ -18,7 +18,7 @@ use url::Url;
 use zeroize::Zeroizing;
 
 use crate::auth::{AuthError, Authenticator, CredentialSnapshot};
-use crate::egress::{DestinationPolicy, ProxyChain, ProxyEndpoint};
+use crate::egress::{DestinationPolicy, ProxyChain, ProxyEndpoint, ProxyProtocol};
 use crate::providers::{
     ProviderAccount, ProviderKind, finalize_request_auth, prepare_request_for_stream,
     translate_bedrock_eventstream,
@@ -352,6 +352,11 @@ impl DataPlane {
         let (url, _upstream_model, mut headers) = prepared.into_parts();
         copy_safe_request_headers(&request.headers, &mut headers)?;
 
+        self.router
+            .lock()
+            .await
+            .start_request(&account.id)
+            .map_err(|_| DataPlaneError::NoCapacity)?;
         let mut upstream = match self
             .transport
             .send(UpstreamRequest {
@@ -366,6 +371,11 @@ impl DataPlane {
         {
             Ok(upstream) => upstream,
             Err(_) => {
+                let _ = self
+                    .router
+                    .lock()
+                    .await
+                    .record_outcome(&account.id, UpstreamOutcome::TransientFailure);
                 self.metrics
                     .upstream_failures_total
                     .fetch_add(1, Ordering::Relaxed);
@@ -468,7 +478,7 @@ impl DataPlane {
     }
 
     pub async fn sticky_session_count(&self) -> usize {
-        self.router.lock().await.session_count()
+        self.router.lock().await.session_count(Utc::now())
     }
 }
 
@@ -536,18 +546,31 @@ impl ReqwestTransport {
 #[async_trait]
 impl UpstreamTransport for ReqwestTransport {
     async fn send(&self, request: UpstreamRequest) -> Result<UpstreamResponse, TransportError> {
-        let resolved = self
-            .destination_policy
-            .resolve_authorized(&request.url)
-            .await
-            .map_err(|_| TransportError)?;
         let destination_host = request.url.host_str().ok_or(TransportError)?.to_owned();
         let selected_proxy = self.selected_proxy(&request.account_id, &request.egress_proxies)?;
+        let resolve_locally = selected_proxy
+            .as_ref()
+            .is_none_or(destination_requires_local_resolution);
+        let resolved = if resolve_locally {
+            Some(
+                self.destination_policy
+                    .resolve_authorized(&request.url)
+                    .await
+                    .map_err(|_| TransportError)?,
+            )
+        } else {
+            self.destination_policy
+                .authorize(&request.url)
+                .map_err(|_| TransportError)?;
+            None
+        };
         let mut client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(15))
             .http2_adaptive_window(true)
             .redirect(Policy::none());
-        client = client.resolve_to_addrs(&destination_host, &resolved);
+        if let Some(resolved) = &resolved {
+            client = client.resolve_to_addrs(&destination_host, resolved);
+        }
         if let Some(endpoint) = selected_proxy {
             client = client.proxy(
                 reqwest::Proxy::all(endpoint.as_url().as_str()).map_err(|_| TransportError)?,
@@ -585,6 +608,10 @@ impl UpstreamTransport for ReqwestTransport {
             body,
         })
     }
+}
+
+fn destination_requires_local_resolution(endpoint: &ProxyEndpoint) -> bool {
+    endpoint.protocol == ProxyProtocol::Socks5
 }
 
 fn presented_token(headers: &HeaderMap) -> Result<Option<String>, DataPlaneError> {
@@ -743,5 +770,21 @@ mod transport_tests {
                 .redacted_authority(),
             "https://res-b.invalid:8443"
         );
+    }
+
+    #[test]
+    fn remote_dns_proxy_protocols_do_not_trigger_local_destination_lookups() {
+        for endpoint in [
+            "http://proxy.invalid:8080",
+            "https://proxy.invalid:8443",
+            "socks5h://proxy.invalid:1080",
+        ] {
+            assert!(!destination_requires_local_resolution(
+                &ProxyEndpoint::parse(endpoint).unwrap()
+            ));
+        }
+        assert!(destination_requires_local_resolution(
+            &ProxyEndpoint::parse("socks5://proxy.invalid:1080").unwrap()
+        ));
     }
 }

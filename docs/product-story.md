@@ -17,7 +17,7 @@ deliberate service boundary:
 - one Anthropic-compatible endpoint for tools and agents;
 - current-token membership, so any active pool account can authenticate a
   caller without introducing another shared proxy secret;
-- sticky sessions with least-utilized eligible placement and model maps;
+- sticky sessions with least-loaded eligible placement and model maps;
 - classified account health and depletion instead of opaque round robin;
 - stable, account-scoped residential egress with explicit ordered fallback;
 - a calm Triform-harmonized control plane for add, pause, resume, revoke, and

@@ -307,6 +307,8 @@ pub fn finalize_request_auth(
     now: DateTime<Utc>,
     prepared: &mut PreparedProviderRequest,
 ) -> Result<(), ProviderError> {
+    use std::fmt::Write as _;
+
     if account.kind != ProviderKind::BedrockSigV4 {
         return Ok(());
     }
@@ -343,16 +345,19 @@ pub fn finalize_request_auth(
     }
     signed_header_names.sort_unstable();
     let signed_headers = signed_header_names.join(";");
-    let canonical_headers = signed_header_names
-        .iter()
-        .map(|name| {
-            let value = prepared
-                .headers
-                .get(*name)
-                .expect("signed header was inserted");
-            format!("{name}:{}\n", collapse_whitespace(value.as_str()))
-        })
-        .collect::<String>();
+    let mut canonical_headers = String::new();
+    for name in &signed_header_names {
+        let value = prepared
+            .headers
+            .get(*name)
+            .expect("signed header was inserted");
+        writeln!(
+            &mut canonical_headers,
+            "{name}:{}",
+            collapse_whitespace(value.as_str())
+        )
+        .expect("writing to a String cannot fail");
+    }
     let canonical_request = format!(
         "{}\n{}\n{}\n{}\n{}\n{}",
         method.as_str(),
@@ -506,7 +511,13 @@ fn hmac_sha256(key: &[u8], value: &[u8]) -> [u8; 32] {
 }
 
 fn hex(value: &[u8]) -> String {
-    value.iter().map(|byte| format!("{byte:02x}")).collect()
+    use std::fmt::Write as _;
+
+    let mut encoded = String::with_capacity(value.len() * 2);
+    for byte in value {
+        write!(&mut encoded, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    encoded
 }
 
 fn valid_header_name(value: &str) -> bool {

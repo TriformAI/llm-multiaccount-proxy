@@ -146,6 +146,28 @@ fn routing_is_least_loaded_then_sticky_and_evicts_bad_accounts() {
 }
 
 #[test]
+fn routing_counts_in_flight_work_and_expires_idle_stickiness() {
+    let mut router = Router::new(vec![account("a", 0), account("b", 0)]);
+    let sticky = RouteRequest {
+        session_id: Some("idle-session".into()),
+        model: "claude-sonnet-4-5".into(),
+    };
+    assert_eq!(router.choose(&sticky, now()).unwrap().account_id, "a");
+    router.start_request("a").unwrap();
+
+    let new_session = RouteRequest {
+        session_id: Some("new-session".into()),
+        model: "claude-sonnet-4-5".into(),
+    };
+    assert_eq!(router.choose(&new_session, now()).unwrap().account_id, "b");
+    router
+        .record_outcome("a", UpstreamOutcome::Success)
+        .unwrap();
+    assert_eq!(router.session_count(now()), 2);
+    assert_eq!(router.session_count(now() + Duration::minutes(31)), 0);
+}
+
+#[test]
 fn retries_stop_at_the_first_irreversible_streaming_boundary() {
     assert_eq!(
         retry_decision(UpstreamOutcome::TransientFailure, false, false),

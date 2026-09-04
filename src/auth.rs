@@ -175,10 +175,13 @@ impl Authenticator {
     }
 
     pub fn metadata_fingerprint(&self, value: &str) -> String {
+        use std::fmt::Write as _;
+
         let digest = self.digest(value);
-        digest[..12]
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
+        let mut fingerprint = String::with_capacity(24);
+        for byte in &digest[..12] {
+            write!(&mut fingerprint, "{byte:02x}").expect("writing to a String cannot fail");
+        }
+        fingerprint
     }
 }

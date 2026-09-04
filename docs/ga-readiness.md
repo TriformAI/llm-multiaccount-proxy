@@ -10,7 +10,7 @@ not end-to-end proof.
 - [x] Reverse Anthropic-compatible routes and response streaming.
 - [x] Opt-in HTTPS MITM listener and non-overwriting CA lifecycle.
 - [x] `off` / `observe` / `enforce` account-membership authentication.
-- [x] Sticky least-utilized routing, model eligibility, classified depletion,
+- [x] Sticky least-loaded routing, model eligibility, classified depletion,
   and no unsafe replay.
 - [x] Account-scoped HTTP(S)/SOCKS5/SOCKS5h chains without implicit direct
   fallback.

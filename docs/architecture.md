@@ -16,7 +16,7 @@ Proxy-aware client ─ CONNECT/TLS ──┘                    │
 
 - `auth` performs mode-aware, constant-time membership checks over active
   account credentials.
-- `routing` owns sticky least-utilized selection, model eligibility, depletion,
+- `routing` owns sticky least-loaded selection, model eligibility, depletion,
   and safe retry-boundary decisions.
 - `providers` owns upstream URL, model, and authentication translation.
 - `egress` validates destinations and models sticky ordered proxy chains.

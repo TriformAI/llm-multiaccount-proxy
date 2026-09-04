@@ -52,7 +52,7 @@ Existing Claudeproxy operators can import the legacy env-file safely with
 A growing team often has several legitimate Claude or compatible-provider
 accounts, but every tool still needs one reliable endpoint. `llmap` turns that
 fragmented capacity into an observable pool: sticky agent sessions,
-least-utilized eligible routing, explicit account pause/revoke controls,
+least-loaded eligible routing, explicit account pause/revoke controls,
 per-account residential egress, and one control plane. Read the full
 [product story and deployment proposal](docs/product-story.md).
 
