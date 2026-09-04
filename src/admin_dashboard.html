@@ -100,7 +100,7 @@
       </header>
       <section class="status-strip" aria-label="Proxy status">
         <div class="stat"><span>Service</span><strong><span class="dot"></span>Ready</strong></div>
-        <div class="stat"><span>Authentication mode</span><strong id="auth-mode">—</strong></div>
+        <div class="stat"><span>Authentication mode</span><select id="auth-mode" aria-label="Authentication mode" disabled><option value="off">off</option><option value="observe">observe</option><option value="enforce">enforce</option></select></div>
         <div class="stat"><span>Active accounts</span><strong id="active-count">—</strong></div>
         <div class="stat"><span>Sticky sessions</span><strong id="session-count">—</strong></div>
       </section>
@@ -145,7 +145,7 @@
     async function load() {
       try {
         const session = await api('/session'); csrf = session.csrf_token;
-        document.getElementById('auth-mode').textContent = session.auth_mode + (session.auth_mode_locked ? ' · config locked' : '');
+        const authMode = document.getElementById('auth-mode'); authMode.value = session.auth_mode; authMode.title = session.auth_mode_locked ? 'Locked by environment configuration' : 'Configured in llmap.toml';
         const accounts = await api('/accounts');
         list.innerHTML = accounts.length ? accounts.map(card).join('') : '<div class="empty">No accounts yet. Add one to open the routing pool.</div>';
         document.getElementById('active-count').textContent = accounts.filter(a=>a.enabled).length;
