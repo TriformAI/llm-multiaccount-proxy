@@ -21,7 +21,7 @@ release targets a secure single-node deployment with:
 ## Status
 
 The public repository is in release-candidate development toward its first GA
-release. The Rust 1.85 service, encrypted account store, reverse data plane,
+release. The Rust 1.88 service, encrypted account store, reverse data plane,
 branded control plane, and opt-in HTTPS MITM listener are implemented. Do not
 place a development snapshot in front of untrusted traffic until the security
 checklist and soak requirements in [GA readiness](docs/ga-readiness.md) are

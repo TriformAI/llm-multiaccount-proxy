@@ -14,7 +14,7 @@ jobs:
   test:
     runs-on: docker
     container:
-      image: rust:1.85-bookworm
+      image: rust:1.88-bookworm
     steps:
       - name: Prepare checkout runtime
         run: |
