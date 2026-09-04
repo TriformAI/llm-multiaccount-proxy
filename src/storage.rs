@@ -200,7 +200,7 @@ impl SqliteStore {
             Err(rusqlite::Error::QueryReturnedNoRows) => return Err(StorageError::NotFound),
             Err(error) => return Err(StorageError::Database(error)),
         };
-        let account = serde_json::from_str(&account_json)
+        let account: ProviderAccount = serde_json::from_str(&account_json)
             .map_err(|error| StorageError::InvalidAccount(error.to_string()))?;
         let associated_data = format!("account:{account_id}");
         let secret = self.secret_box.decrypt(
