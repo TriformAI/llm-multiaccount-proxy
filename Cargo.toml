@@ -20,19 +20,26 @@ name = "llmap"
 path = "src/main.rs"
 
 [dependencies]
+argon2 = "0.5.3"
+base64 = "0.22.1"
 chrono = { version = "0.4.41", default-features = false, features = ["clock", "serde", "std"] }
+chacha20poly1305 = "0.10.1"
 hmac = "0.12.1"
+rand = "0.8.5"
+rusqlite = { version = "0.32.1", features = ["bundled"] }
 serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
 sha2 = "0.10.9"
 subtle = "2.6.1"
 thiserror = "2.0.12"
 toml = "0.8.22"
 url = { version = "2.5.4", features = ["serde"] }
+zeroize = "1.8.1"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
+tempfile = "3.19.1"
 
 [profile.release]
 lto = "thin"
 strip = "symbols"
-
