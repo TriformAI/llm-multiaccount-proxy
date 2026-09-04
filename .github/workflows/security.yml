@@ -19,9 +19,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with: {toolchain: 1.88.0}
       - uses: EmbarkStudios/cargo-deny-action@v2
-      - uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run pinned RustSec audit
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo audit
 
   secrets:
     runs-on: ubuntu-latest
