@@ -22,8 +22,20 @@ jobs:
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --all-features
 
-  binaries:
+  release:
     needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      # Create a draft before parallel uploads. Publishing only after both
+      # artifact families finish also works when immutable releases are enabled.
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
+
+  binaries:
+    needs: [quality, release]
     env:
       LLMAP_BUILD_SHA: ${{ github.sha }}
     strategy:
@@ -45,7 +57,7 @@ jobs:
           checksum: sha256
 
   container:
-    needs: quality
+    needs: [quality, release]
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.build.outputs.digest }}
@@ -91,5 +103,16 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: llmap-container.spdx.json
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
+
+  publish:
+    needs: [binaries, container]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           make_latest: ${{ !contains(github.ref_name, '-') }}
