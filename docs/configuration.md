@@ -1,8 +1,8 @@
 # Configuration reference
 
 `llmap` reads TOML. `llmap config check --config PATH` validates it without
-opening listeners or reading secret values. Unknown fields are currently
-ignored for forward compatibility; review release notes before upgrades.
+opening listeners or reading secret values. Unknown fields are rejected so a
+misspelled security setting cannot silently fall back to a default.
 
 ## `[server]`
 

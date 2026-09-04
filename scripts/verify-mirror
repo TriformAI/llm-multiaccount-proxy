@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+forgejo_url="${LLMAP_FORGEJO_URL:-https://forgejo.triform.dev/triform/llm-multiaccount-proxy.git}"
+github_url="${LLMAP_GITHUB_URL:-https://github.com/TriformAI/llm-multiaccount-proxy.git}"
+
+forgejo_main="$(git ls-remote "$forgejo_url" refs/heads/main | awk '{print $1}')"
+github_main="$(git ls-remote "$github_url" refs/heads/main | awk '{print $1}')"
+
+if [[ -z "$forgejo_main" || -z "$github_main" ]]; then
+  echo "mirror verification failed: main is missing from one remote" >&2
+  exit 1
+fi
+if [[ "$forgejo_main" != "$github_main" ]]; then
+  echo "mirror verification failed: GitHub main differs from Forgejo main" >&2
+  exit 1
+fi
+
+forgejo_tags="$(git ls-remote --tags "$forgejo_url" | sed 's/\^{}$//' | sort -u)"
+github_tags="$(git ls-remote --tags "$github_url" | sed 's/\^{}$//' | sort -u)"
+if [[ "$forgejo_tags" != "$github_tags" ]]; then
+  echo "mirror verification failed: signed tag refs differ" >&2
+  exit 1
+fi
+
+echo "mirror parity verified at $forgejo_main"

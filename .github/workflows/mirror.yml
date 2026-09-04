@@ -1,0 +1,16 @@
+name: Mirror parity
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "13 */8 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/verify-mirror

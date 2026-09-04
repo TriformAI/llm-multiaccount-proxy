@@ -21,5 +21,15 @@ jobs:
           apt-get install -y -qq --no-install-recommends nodejs pkg-config
           git config --global --add safe.directory '*'
       - uses: actions/checkout@v4
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Lints
+        run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features
-
+      - name: Preserve resolved dependency lock
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: cargo-lock-${{ github.sha }}
+          path: Cargo.lock
+          if-no-files-found: error

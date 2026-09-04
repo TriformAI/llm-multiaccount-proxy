@@ -7,6 +7,7 @@ use thiserror::Error;
 use crate::auth::AuthMode;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub server: ServerConfig,
     #[serde(default)]
@@ -19,6 +20,7 @@ pub struct Config {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     pub bind: String,
     #[serde(default = "default_max_request_bytes")]
@@ -28,6 +30,7 @@ pub struct ServerConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ForwardProxyConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -42,6 +45,7 @@ pub struct ForwardProxyConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthConfig {
     pub mode: AuthMode,
     #[serde(skip)]
@@ -49,12 +53,14 @@ pub struct AuthConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct StorageConfig {
     pub database_path: String,
     pub master_key_env: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AdminConfig {
     pub username: String,
     pub bootstrap_password_env: String,
@@ -63,6 +69,7 @@ pub struct AdminConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TelemetryConfig {
     #[serde(default = "default_audit_retention_days")]
     pub audit_retention_days: u16,
