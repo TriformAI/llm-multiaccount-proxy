@@ -24,12 +24,5 @@ jobs:
       - name: Formatting
         run: cargo fmt --all -- --check
       - name: Lints
-        run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo test --all-features
-      - name: Preserve resolved dependency lock
-        if: always()
-        uses: actions/upload-artifact@v3
-        with:
-          name: cargo-lock-${{ github.sha }}
-          path: Cargo.lock
-          if-no-files-found: error
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --all-features

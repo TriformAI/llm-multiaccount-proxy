@@ -4,13 +4,37 @@ The current internal Python Claudeproxy remains the production path until the
 standalone service proves parity. Migration is an evidence sequence, not a
 replacement deployment.
 
-## 1. Inventory without exporting secrets
+## 1. Inventory and import locally
 
 Record account labels, provider kinds, client-facing model names, current
 enabled state, and whether each account uses direct or residential egress. Move
 credential values only through the approved secret channel into the write-only
 control plane. Triform-specific Plane routing, operator pause mechanisms, and
 pipeline controls stay outside the public core.
+
+`llmap` can read Claudeproxy's `CLAUDE_ACCOUNT_N_NAME` and
+`CLAUDE_ACCOUNT_N` env-file format directly. It never evaluates the file as a
+shell script and reports counts only—never credential values:
+
+```bash
+export LLMAP_MASTER_KEY="$(openssl rand -base64 32)"
+llmap migrate claudeproxy-env \
+  --config llmap.toml \
+  --input /secure/path/env-claude-accounts
+```
+
+The importer creates deterministic IDs (`claudeproxy-1`, `claudeproxy-2`,
+and so on), preserves commented/paused accounts as disabled, and converts
+Claude OAuth, Anthropic API-key, Bedrock API-key/SigV4, and configured
+Anthropic-compatible entries. OAuth expiry is converted from milliseconds to
+RFC 3339 and the supported Claude refresh endpoint is installed. Legacy
+`proxyUrl`, `proxyUrls`, and `egressProxies` fields become encrypted per-account
+egress chains.
+
+Existing IDs are skipped. Inspect the redacted control-plane result before
+using `--replace`; replacement rotates both provider and proxy credentials and
+is intentionally explicit. Keep the source file outside the repository and
+delete or archive it only through your normal secret-handling procedure.
 
 ## 2. Shadow configuration
 

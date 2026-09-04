@@ -427,7 +427,7 @@ impl SqliteStore {
             .collect();
         let account_json = serde_json::to_string(&public_account)
             .map_err(|error| StorageError::InvalidAccount(error.to_string()))?;
-        Ok((account_json, egress.as_storage_value()))
+        Ok((account_json, egress.as_storage_value().to_owned()))
     }
 
     fn hydrate_account_egress(

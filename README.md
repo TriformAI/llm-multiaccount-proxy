@@ -44,6 +44,9 @@ Start with the [quick-start guide](docs/quickstart.md), then read
 [configuration](docs/configuration.md), [client authentication](docs/authentication.md),
 and [provider adapters](docs/providers.md).
 
+Existing Claudeproxy operators can import the legacy env-file safely with
+`llmap migrate claudeproxy-env`; see the [migration guide](docs/migration.md).
+
 ## Why it exists
 
 A growing team often has several legitimate Claude or compatible-provider
@@ -75,6 +78,7 @@ version tags are mirrored to GitHub, where public releases are published.
 - [Operations and backup](docs/operations.md)
 - [Security and threat model](docs/security.md)
 - [Migration from Claudeproxy](docs/migration.md)
+- [Acceptance test plan](docs/uat.md)
 - [Upgrade and rollback](docs/upgrades.md)
 - [Troubleshooting](docs/troubleshooting.md)
 

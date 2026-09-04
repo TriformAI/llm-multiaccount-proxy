@@ -400,7 +400,7 @@ fn convert_api_provider(
             SecretInput::new(api_key),
         ));
     }
-    let path = base_url.path().trim_end_matches('/');
+    let path = base_url.path().trim_end_matches('/').to_owned();
     if !path.ends_with("/anthropic") {
         base_url.set_path(&format!("{path}/anthropic/"));
     }

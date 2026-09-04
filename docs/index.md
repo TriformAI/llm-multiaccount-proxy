@@ -23,6 +23,7 @@ Use this map according to the job you are doing.
 
 - [Architecture](architecture.md): data flow and module ownership.
 - [Migration from Claudeproxy](migration.md): parity, canary, rollback, and soak.
+- [Acceptance test plan](uat.md): human-observable journeys for a release candidate.
 - [GA readiness](ga-readiness.md): evidence required for the first stable release.
 - [Product story](product-story.md): who it is for and how to explain its value responsibly.
 
