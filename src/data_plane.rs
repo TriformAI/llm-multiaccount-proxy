@@ -19,7 +19,7 @@ use zeroize::Zeroizing;
 
 use crate::auth::{AuthError, Authenticator, CredentialSnapshot};
 use crate::egress::{DestinationPolicy, ProxyChain, ProxyEndpoint};
-use crate::providers::{ProviderAccount, prepare_request};
+use crate::providers::{ProviderAccount, ProviderKind, finalize_request_auth, prepare_request};
 use crate::routing::{RouteRequest, Router, UpstreamOutcome};
 use crate::secrets::SecretInput;
 
@@ -299,17 +299,38 @@ impl DataPlane {
                     DataPlaneError::NoCapacity
                 }
             })?;
-        let prepared = prepare_request(
+        let mut prepared = prepare_request(
             &account,
             &credential,
             &request.path_and_query,
             &requested_model,
         )
         .map_err(|_| DataPlaneError::UpstreamUnavailable)?;
-        let (url, upstream_model, mut headers) = prepared.into_parts();
-        copy_safe_request_headers(&request.headers, &mut headers)?;
+        let upstream_model = prepared.upstream_model.clone();
         let body = if let Some(value) = json.as_mut() {
-            if let Some(model) = value.get_mut("model") {
+            if matches!(
+                account.kind,
+                ProviderKind::BedrockApiKey | ProviderKind::BedrockSigV4
+            ) && request.path_and_query.split('?').next() == Some("/v1/messages")
+            {
+                if value
+                    .get("stream")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    return Err(DataPlaneError::BadRequest(
+                        "native Bedrock streaming is not enabled in this release candidate".into(),
+                    ));
+                }
+                let object = value.as_object_mut().ok_or_else(|| {
+                    DataPlaneError::BadRequest("messages body must be a JSON object".into())
+                })?;
+                object.remove("model");
+                object.remove("stream");
+                object
+                    .entry("anthropic_version")
+                    .or_insert_with(|| serde_json::Value::String("bedrock-2023-05-31".into()));
+            } else if let Some(model) = value.get_mut("model") {
                 *model = serde_json::Value::String(upstream_model);
             }
             Bytes::from(
@@ -319,6 +340,17 @@ impl DataPlane {
         } else {
             request.body
         };
+        finalize_request_auth(
+            &account,
+            &credential,
+            &request.method,
+            &body,
+            now,
+            &mut prepared,
+        )
+        .map_err(|_| DataPlaneError::UpstreamUnavailable)?;
+        let (url, _upstream_model, mut headers) = prepared.into_parts();
+        copy_safe_request_headers(&request.headers, &mut headers)?;
 
         let upstream = match self
             .transport
@@ -606,7 +638,9 @@ fn copy_safe_request_headers(
             let value = value.to_str().map_err(|_| {
                 DataPlaneError::BadRequest(format!("header {name} is not valid text"))
             })?;
-            outgoing.insert(name.to_owned(), Zeroizing::new(value.to_owned()));
+            outgoing
+                .entry(name.to_owned())
+                .or_insert_with(|| Zeroizing::new(value.to_owned()));
         }
     }
     Ok(())
