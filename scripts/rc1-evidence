@@ -1,0 +1,50 @@
+#!/bin/sh
+set -u
+
+output=${1:-target/rc1-evidence/summary.json}
+output_directory=$(dirname "$output")
+mkdir -p "$output_directory"
+
+started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+tested_commit=$(git rev-parse HEAD 2>/dev/null || printf unknown)
+
+test_exit=0
+cargo test --locked --all-features || test_exit=$?
+
+completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+if [ "$test_exit" -eq 0 ]; then
+  result=pass
+else
+  result=fail
+fi
+
+cat >"$output" <<EOF
+{
+  "schema_version": 1,
+  "result": "$result",
+  "tested_commit": "$tested_commit",
+  "started_at": "$started_at",
+  "completed_at": "$completed_at",
+  "evidence_policy": "metadata_only_no_prompts_responses_or_credentials",
+  "scenarios": [
+    "health_admin_and_auth",
+    "sticky_least_loaded_routing",
+    "synthetic_fault_matrix_401_403_429_529_disconnect",
+    "concurrent_long_stream_load",
+    "residential_proxy_failover_without_direct_fallback",
+    "irreversible_stream_replay_boundary",
+    "bedrock_sigv4_and_eventstream",
+    "restore_and_plaintext_scan",
+    "canary_manifest_and_selector_rollback"
+  ],
+  "boundaries": [
+    "live_provider_requests_not_exercised",
+    "live_cluster_canary_not_exercised",
+    "external_pentest_not_exercised",
+    "thirty_day_soak_not_exercised"
+  ]
+}
+EOF
+
+printf 'RC1 evidence result=%s commit=%s artifact=%s\n' "$result" "$tested_commit" "$output"
+exit "$test_exit"

@@ -25,6 +25,7 @@ Use this map according to the job you are doing.
 - [Migration from Claudeproxy](migration.md): parity, canary, rollback, and soak.
 - [Acceptance test plan](uat.md): human-observable journeys for a release candidate.
 - [GA readiness](ga-readiness.md): evidence required for the first stable release.
+- [RC1 evidence](rc1-evidence.md): automated contract bundle and live-proof boundaries.
 - [Product story](product-story.md): who it is for and how to explain its value responsibly.
 
 The [HTTP API reference](api.md) documents public and administrator routes.
