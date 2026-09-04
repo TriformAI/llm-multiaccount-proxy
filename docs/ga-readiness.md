@@ -57,7 +57,8 @@ not end-to-end proof.
 
 - [x] Apache-2.0 public repository on GitHub and Forgejo integration authority.
 - [x] Forgejo-to-GitHub push mirror configured for branches and tags.
-- [ ] Protected branches require review and CI; mirror parity monitor is green.
+- [x] Forgejo and GitHub protected branches require review and CI; the
+  scheduled mirror parity monitor is green.
 - [ ] Reproducible container and multi-platform binaries published from a
   signed tag with checksums, SBOM, and provenance.
 
