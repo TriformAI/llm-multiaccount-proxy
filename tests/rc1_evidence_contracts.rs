@@ -35,6 +35,8 @@ fn release_workflow_never_presents_a_prerelease_as_ga() {
 
     assert!(workflow.contains("prerelease: ${{ contains(github.ref_name, '-') }}"));
     assert!(workflow.contains("make_latest: ${{ !contains(github.ref_name, '-') }}"));
+    assert!(workflow.contains("\n  release:\n"));
+    assert_eq!(workflow.matches("needs: [quality, release]").count(), 2);
 }
 
 struct EvidenceRepository {
