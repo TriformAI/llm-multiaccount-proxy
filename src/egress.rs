@@ -1,5 +1,5 @@
 use std::fmt;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 
 use thiserror::Error;
@@ -43,6 +43,8 @@ pub enum EgressError {
     EmptyProxyChain,
     #[error("proxy index does not exist")]
     UnknownProxyIndex,
+    #[error("destination DNS resolution failed or returned no addresses")]
+    ResolutionFailed,
 }
 
 impl ProxyEndpoint {
@@ -109,6 +111,36 @@ impl DestinationPolicy {
             return Ok(());
         }
         Err(EgressError::DestinationNotAllowed)
+    }
+
+    pub async fn resolve_authorized(
+        &self,
+        destination: &Url,
+    ) -> Result<Vec<SocketAddr>, EgressError> {
+        self.authorize(destination)?;
+        let host = destination
+            .host_str()
+            .ok_or(EgressError::DestinationNotAllowed)?;
+        let port = destination
+            .port_or_known_default()
+            .ok_or(EgressError::DestinationNotAllowed)?;
+        let addresses = if let Ok(address) = IpAddr::from_str(host) {
+            vec![SocketAddr::new(address, port)]
+        } else {
+            tokio::net::lookup_host((host, port))
+                .await
+                .map_err(|_| EgressError::ResolutionFailed)?
+                .collect::<Vec<_>>()
+        };
+        if addresses.is_empty() {
+            return Err(EgressError::ResolutionFailed);
+        }
+        if !self.allow_unsafe_private_networks
+            && addresses.iter().any(|address| is_unsafe_ip(address.ip()))
+        {
+            return Err(EgressError::UnsafeDestination);
+        }
+        Ok(addresses)
     }
 }
 
@@ -185,6 +217,10 @@ fn is_unsafe_host(host: &str) -> bool {
     let Ok(address) = IpAddr::from_str(host) else {
         return false;
     };
+    is_unsafe_ip(address)
+}
+
+fn is_unsafe_ip(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(address) => {
             address.is_private()

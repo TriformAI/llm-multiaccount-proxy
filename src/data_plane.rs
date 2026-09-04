@@ -521,14 +521,18 @@ impl ReqwestTransport {
 #[async_trait]
 impl UpstreamTransport for ReqwestTransport {
     async fn send(&self, request: UpstreamRequest) -> Result<UpstreamResponse, TransportError> {
-        self.destination_policy
-            .authorize(&request.url)
+        let resolved = self
+            .destination_policy
+            .resolve_authorized(&request.url)
+            .await
             .map_err(|_| TransportError)?;
+        let destination_host = request.url.host_str().ok_or(TransportError)?.to_owned();
         let selected_proxy = self.selected_proxy(&request.account_id, &request.egress_proxies)?;
         let mut client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(15))
             .http2_adaptive_window(true)
             .redirect(Policy::none());
+        client = client.resolve_to_addrs(&destination_host, &resolved);
         if let Some(endpoint) = selected_proxy {
             client = client.proxy(
                 reqwest::Proxy::all(endpoint.as_url().as_str()).map_err(|_| TransportError)?,
