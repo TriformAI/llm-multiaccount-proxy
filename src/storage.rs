@@ -1,5 +1,7 @@
 use std::collections::HashSet;
+use std::fs::OpenOptions;
 use std::path::Path;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -58,6 +60,12 @@ pub enum StorageError {
     NotFound,
     #[error("stored account data is invalid: {0}")]
     InvalidAccount(String),
+    #[error("backup destination already exists")]
+    BackupDestinationExists,
+    #[error("backup filesystem operation failed: {0}")]
+    BackupFilesystem(#[from] std::io::Error),
+    #[error("backup integrity check failed")]
+    InvalidBackup,
 }
 
 pub struct SqliteStore {
@@ -488,6 +496,46 @@ impl SqliteStore {
             .map_err(StorageError::Database)
     }
 
+    /// Write a transactionally consistent SQLite snapshot without exposing
+    /// the separately managed encryption key or overwriting an earlier backup.
+    pub fn backup_to(&self, destination: &Path) -> Result<(), StorageError> {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            options.mode(0o600);
+        }
+        match options.open(destination) {
+            Ok(file) => drop(file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(StorageError::BackupDestinationExists);
+            }
+            Err(error) => return Err(StorageError::BackupFilesystem(error)),
+        }
+
+        let result = (|| {
+            let source = self.connection.lock();
+            let mut target = Connection::open(destination)?;
+            {
+                let backup = rusqlite::backup::Backup::new(&source, &mut target)?;
+                backup.run_to_completion(128, Duration::from_millis(5), None)?;
+            }
+            let integrity: String =
+                target.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+            if integrity != "ok" {
+                return Err(StorageError::InvalidBackup);
+            }
+            Ok(())
+        })();
+
+        if result.is_err() {
+            let _ = std::fs::remove_file(destination);
+        }
+        result
+    }
+
     pub fn list_accounts(&self) -> Result<Vec<PublicAccount>, StorageError> {
         let connection = self.connection.lock();
         let mut statement = connection.prepare(
@@ -763,9 +811,11 @@ impl AccountRepository for SqliteStore {
         SqliteStore::load_account(self, account_id).map_err(|error| match error {
             StorageError::NotFound => RepositoryError::NotFound,
             StorageError::Database(_) => RepositoryError::Unavailable,
-            StorageError::Secret(_) | StorageError::InvalidAccount(_) => {
-                RepositoryError::InvalidData
-            }
+            StorageError::Secret(_)
+            | StorageError::InvalidAccount(_)
+            | StorageError::BackupDestinationExists
+            | StorageError::BackupFilesystem(_)
+            | StorageError::InvalidBackup => RepositoryError::InvalidData,
         })
     }
 
@@ -785,9 +835,11 @@ impl AccountRepository for SqliteStore {
         .map_err(|error| match error {
             StorageError::Database(_) => RepositoryError::Unavailable,
             StorageError::NotFound => RepositoryError::NotFound,
-            StorageError::Secret(_) | StorageError::InvalidAccount(_) => {
-                RepositoryError::InvalidData
-            }
+            StorageError::Secret(_)
+            | StorageError::InvalidAccount(_)
+            | StorageError::BackupDestinationExists
+            | StorageError::BackupFilesystem(_)
+            | StorageError::InvalidBackup => RepositoryError::InvalidData,
         })
     }
 }

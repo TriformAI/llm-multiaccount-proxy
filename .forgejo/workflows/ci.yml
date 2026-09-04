@@ -26,4 +26,12 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Lints
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
-      - run: cargo test --locked --all-features
+      - name: RC1 contract evidence
+        run: ./scripts/rc1-evidence target/rc1-evidence/summary.json
+      - name: Publish RC1 contract evidence
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: rc1-evidence-${{ github.sha }}
+          path: target/rc1-evidence/summary.json
+          if-no-files-found: error

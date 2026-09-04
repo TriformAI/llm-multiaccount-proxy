@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: llmap-canary
+  labels:
+    app.kubernetes.io/name: llmap
+    app.kubernetes.io/instance: llmap-canary
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llmap
+      app.kubernetes.io/instance: llmap-canary

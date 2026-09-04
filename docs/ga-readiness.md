@@ -18,7 +18,8 @@ not end-to-end proof.
   pause/delete effect.
 - [x] Automatic Claude OAuth refresh with bounded previous-token overlap and
   compare-and-swap persistence.
-- [ ] Native Bedrock SigV4 vectors and Anthropic-to-Bedrock streaming parity.
+- [x] Native Bedrock SigV4 vectors and Anthropic-to-Bedrock streaming parity,
+  including a published AWS signing vector and Smithy EventStream semantics.
 - [x] Upstream DNS resolution validation and address pinning before direct
   connections; remote-DNS proxy chains remain inside the configured egress
   trust boundary.
@@ -42,6 +43,11 @@ not end-to-end proof.
   architecture, API, operations, security, upgrade, rollback, migration, and
   troubleshooting documentation.
 - [ ] Restore drill proves encrypted SQLite recovery with no plaintext leak.
+- [x] Deterministic synthetic restore contract covers online snapshot,
+  integrity, same-key recovery, wrong-key rejection, and fake-secret scanning.
+- [x] Deterministic synthetic fault/load matrix covers long streams,
+  401/403/429/529, pre-response disconnect, residential-proxy failover,
+  metadata-only audit, and irreversible replay boundaries.
 - [ ] Load/soak test covers long streams, disconnects, 401/403/429/529, proxy
   failure, account mutation, restart, and disk pressure.
 - [ ] Python-to-Rust canary and rollback rehearsal, then 30 consecutive clean
@@ -51,10 +57,16 @@ not end-to-end proof.
 
 - [x] Apache-2.0 public repository on GitHub and Forgejo integration authority.
 - [x] Forgejo-to-GitHub push mirror configured for branches and tags.
-- [ ] Protected branches require review and CI; mirror parity monitor is green.
+- [x] Forgejo and GitHub protected branches require review and CI; the
+  scheduled mirror parity monitor is green.
 - [ ] Reproducible container and multi-platform binaries published from a
   signed tag with checksums, SBOM, and provenance.
 
 Release owners attach CI URLs, image digests, signed tag, scan reports, UAT
 records, canary dashboards, restore record, rollback record, and soak dates to
 the release issue.
+
+Automated scope and explicit live boundaries are mapped in
+[RC1 evidence](rc1-evidence.md). The synthetic checks do not close the restore,
+load/soak, penetration-test, live-canary, or stable-release gates by
+themselves.

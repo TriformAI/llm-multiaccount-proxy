@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: llmap-canary
+  labels:
+    app.kubernetes.io/name: llmap
+    app.kubernetes.io/instance: llmap-canary
+spec:
+  serviceName: llmap-canary-headless
+  replicas: 1
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: llmap
+      app.kubernetes.io/instance: llmap-canary
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: llmap
+        app.kubernetes.io/instance: llmap-canary
+        app.kubernetes.io/component: proxy
+        rollout.llmap.dev/traffic: candidate
+    spec:
+      serviceAccountName: llmap-canary
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: llmap
+          # Replace this placeholder through a reviewed overlay with the exact
+          # digest produced for the release candidate. A tag is not sufficient.
+          image: ghcr.io/triformai/llm-multiaccount-proxy@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          args: ["serve", "--config", "/etc/llmap/llmap.toml"]
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            # This package intentionally does not create a Secret. Provision
+            # these values through the cluster's external secret controller.
+            - secretRef:
+                name: llmap-canary-secrets
+                optional: false
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: http
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/llmap
+              readOnly: true
+            - name: state
+              mountPath: /var/lib/llmap
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: llmap-canary-config
+        - name: tmp
+          emptyDir:
+            sizeLimit: 32Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: state
+        labels:
+          app.kubernetes.io/name: llmap
+          app.kubernetes.io/instance: llmap-canary
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi

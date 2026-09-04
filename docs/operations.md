@@ -26,15 +26,36 @@ needed.
 
 ## Backup and restore
 
-Keep the master key outside the database backup. Use a SQLite-aware snapshot
-or stop the process and copy the database plus `-wal`/`-shm` files together.
-Encrypt backups and test restore on an isolated host:
+Keep the master key outside the database backup. Create a transactionally
+consistent snapshot with the built-in online backup command:
+
+```bash
+llmap backup create --config /etc/llmap/llmap.toml \
+  --output /secure/backups/llmap-$(date -u +%Y%m%dT%H%M%SZ).db
+```
+
+The command refuses to overwrite an existing destination and verifies the
+snapshot with SQLite's integrity check. Provider credentials and residential
+proxy userinfo remain application-encrypted, but account labels and audit
+metadata do not; encrypt the whole backup at rest as operational data. Retain
+the configured master key in a separate secret system.
+
+Test restore on an isolated host:
 
 1. Restore the database and the same master key.
 2. Start on loopback with forward mode disabled.
-3. Confirm accounts list without credentials appearing.
-4. Send a synthetic request through one designated test account.
-5. Destroy the isolated copy securely.
+3. Start the restored database with the same master key and confirm the
+   redacted account inventory and metadata audit are present.
+4. Confirm startup with a deliberately different key cannot decrypt an
+   account credential.
+5. Search the database, logs, audit export, and browser response for the test
+   credential and proxy-userinfo sentinels; none may appear in plaintext.
+6. Send a synthetic request through one designated test account.
+7. Destroy the isolated copy securely.
+
+Copying only the main `llmap.db` file from a running WAL database is not a
+backup. If the built-in command cannot be used, stop the process before
+copying the database plus any `-wal` and `-shm` files as one unit.
 
 Back up the MITM CA separately. The public certificate alone is insufficient;
 the private key is high-impact interception material.
