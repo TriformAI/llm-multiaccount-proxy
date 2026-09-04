@@ -28,6 +28,7 @@ bytes = "1.10.1"
 chrono = { version = "0.4.41", default-features = false, features = ["clock", "serde", "std"] }
 chacha20poly1305 = "0.10.1"
 clap = { version = "4.5.37", features = ["derive"] }
+crc32fast = "1.4.2"
 futures-util = "0.3.31"
 hmac = "0.12.1"
 http-body-util = "0.1.3"

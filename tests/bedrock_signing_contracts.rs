@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use axum::http::Method;
 use chrono::{TimeZone, Utc};
-use llmap::providers::{ProviderAccount, ProviderKind, finalize_request_auth, prepare_request};
+use llmap::providers::{
+    ProviderAccount, ProviderKind, decode_bedrock_frame, finalize_request_auth, prepare_request,
+    prepare_request_for_stream,
+};
 use llmap::secrets::SecretInput;
 use url::Url;
 
@@ -40,6 +43,52 @@ fn bedrock_api_key_uses_native_invoke_path() {
     assert_eq!(
         prepared.header("authorization"),
         Some("Bearer fake-bedrock-bearer")
+    );
+}
+
+#[test]
+fn bedrock_stream_path_and_event_frames_translate_to_anthropic_sse() {
+    let prepared = prepare_request_for_stream(
+        &account(ProviderKind::BedrockApiKey),
+        &SecretInput::new("fake-bedrock-bearer"),
+        "/v1/messages",
+        "claude-default",
+        true,
+    )
+    .unwrap();
+    assert!(
+        prepared
+            .url
+            .path()
+            .ends_with("/invoke-with-response-stream")
+    );
+
+    let anthropic_event =
+        br#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}"#;
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "bytes": base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            anthropic_event
+        )
+    }))
+    .unwrap();
+    let total_length = 16 + payload.len();
+    let mut frame = Vec::new();
+    frame.extend_from_slice(&(total_length as u32).to_be_bytes());
+    frame.extend_from_slice(&0_u32.to_be_bytes());
+    let prelude_crc = crc32fast::hash(&frame);
+    frame.extend_from_slice(&prelude_crc.to_be_bytes());
+    frame.extend_from_slice(&payload);
+    let message_crc = crc32fast::hash(&frame);
+    frame.extend_from_slice(&message_crc.to_be_bytes());
+
+    let sse = decode_bedrock_frame(&frame).unwrap();
+    assert_eq!(
+        String::from_utf8(sse.to_vec()).unwrap(),
+        format!(
+            "event: content_block_delta\ndata: {}\n\n",
+            String::from_utf8_lossy(anthropic_event)
+        )
     );
 }
 
