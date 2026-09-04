@@ -48,6 +48,11 @@ enum Command {
         #[command(subcommand)]
         command: MigrateCommand,
     },
+    /// Create a consistent SQLite backup while the service is running.
+    Backup {
+        #[command(subcommand)]
+        command: BackupCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -77,6 +82,17 @@ enum MigrateCommand {
         /// Replace deterministic claudeproxy-N account IDs that already exist.
         #[arg(long)]
         replace: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum BackupCommand {
+    /// Create a new backup without overwriting an existing file.
+    Create {
+        #[arg(long, default_value = "llmap.toml")]
+        config: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
     },
 }
 
@@ -120,7 +136,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     replace,
                 },
         } => migrate_claudeproxy_env(&config, &input, replace),
+        Command::Backup {
+            command: BackupCommand::Create { config, output },
+        } => backup_database(&config, &output),
     }
+}
+
+fn backup_database(config_path: &Path, output: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let config = load_config(config_path)?;
+    let encoded_master_key = Zeroizing::new(required_environment(&config.storage.master_key_env)?);
+    let master_key = parse_master_key(&encoded_master_key)?;
+    let store = SqliteStore::open(
+        Path::new(&config.storage.database_path),
+        SecretBox::new(master_key),
+    )?;
+    store.backup_to(output)?;
+    println!(
+        "created SQLite backup with encrypted credentials: {} (keep the master key separate)",
+        output.display()
+    );
+    Ok(())
 }
 
 fn migrate_claudeproxy_env(
