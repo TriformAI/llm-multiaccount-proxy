@@ -56,4 +56,5 @@ CA private key away from the proxy host. See [HTTPS forward proxy](forward-proxy
 ## Container deployment
 
 Copy `examples/docker-compose.yml` and adjust the config paths to
-`/var/lib/llmap`. Bind public listeners deliberately; the example uses loopback.
+`/var/lib/llmap`. Set `LLMAP_IMAGE` to the immutable image digest from a signed
+release. Bind public listeners deliberately; the example uses loopback.

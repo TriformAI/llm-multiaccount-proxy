@@ -1,6 +1,6 @@
 services:
   llmap:
-    image: ghcr.io/triformai/llm-multiaccount-proxy:latest
+    image: "${LLMAP_IMAGE:?set LLMAP_IMAGE to a release image digest}"
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"

@@ -1,10 +1,17 @@
 FROM rust:1.85-bookworm AS builder
+ARG VCS_REF=unknown
 WORKDIR /source
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN cargo build --release --locked
+RUN LLMAP_BUILD_SHA="$VCS_REF" cargo build --release --locked
 
 FROM debian:bookworm-slim
+ARG VCS_REF=unknown
+ARG VERSION=development
+LABEL org.opencontainers.image.source="https://github.com/TriformAI/llm-multiaccount-proxy" \
+      org.opencontainers.image.revision="$VCS_REF" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.licenses="Apache-2.0"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \

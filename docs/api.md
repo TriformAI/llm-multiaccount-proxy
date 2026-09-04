@@ -5,7 +5,8 @@
 - `ANY /v1` and `ANY /v1/*` proxy Anthropic-compatible traffic.
 - `ANY /session/{id}/v1` and descendants provide explicit sticky sessions.
 - `x-llmap-session` is the equivalent header; path and header values must agree.
-- `GET /health` is liveness; `GET /ready` is process readiness.
+- `GET /health` is liveness and reports build version/commit lineage; `GET
+  /ready` is process readiness.
 - `GET /metrics` returns metadata-only Prometheus text.
 
 Failures use an Anthropic-shaped JSON error plus an actionable `_suggestion`.

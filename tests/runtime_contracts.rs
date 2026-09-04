@@ -103,11 +103,24 @@ async fn branded_admin_session_can_create_a_redacted_routable_account() {
         },
     );
 
+    let health = app
+        .clone()
+        .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(health.status(), StatusCode::OK);
+    let health_json: serde_json::Value =
+        serde_json::from_slice(&health.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(health_json["service"], "llmap");
+    assert_eq!(health_json["build"]["version"], env!("CARGO_PKG_VERSION"));
+
     let login = app
         .clone()
         .oneshot(
             Request::post("/admin/api/v1/login")
-                .extension(ConnectInfo("127.0.0.1:40000".parse().unwrap()))
+                .extension(ConnectInfo(
+                    "127.0.0.1:40000".parse::<std::net::SocketAddr>().unwrap(),
+                ))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     r#"{"username":"operator","password":"fake-admin-password"}"#,

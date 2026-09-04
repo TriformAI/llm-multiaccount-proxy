@@ -24,6 +24,8 @@ jobs:
 
   binaries:
     needs: quality
+    env:
+      LLMAP_BUILD_SHA: ${{ github.sha }}
     strategy:
       matrix:
         target:
@@ -71,6 +73,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ github.ref_name }}
           provenance: mode=max
           sbom: true
       - uses: sigstore/cosign-installer@v4.1.2

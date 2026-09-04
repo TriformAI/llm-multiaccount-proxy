@@ -2,7 +2,8 @@
 
 ## Health model
 
-`/health` proves the process can answer. `/ready` currently proves startup,
+`/health` proves the process can answer and identifies its version plus embedded
+source commit when the distribution supplies `LLMAP_BUILD_SHA`. `/ready` currently proves startup,
 configuration, and database opening completed. A ready process can still have
 zero eligible provider accounts, so alert on request outcomes and active account
 count as well as the probe.

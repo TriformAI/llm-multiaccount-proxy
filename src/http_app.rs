@@ -86,7 +86,14 @@ pub fn application_router(
 }
 
 async fn health() -> impl IntoResponse {
-    Json(json!({"status": "ok", "service": "llmap"}))
+    Json(json!({
+        "status": "ok",
+        "service": "llmap",
+        "build": {
+            "version": env!("CARGO_PKG_VERSION"),
+            "commit_sha": option_env!("LLMAP_BUILD_SHA"),
+        }
+    }))
 }
 
 async fn ready() -> impl IntoResponse {
