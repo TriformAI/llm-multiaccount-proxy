@@ -13,6 +13,7 @@ fn account(kind: ProviderKind) -> ProviderAccount {
         base_url: Url::parse("https://api.anthropic.com/").unwrap(),
         enabled: true,
         model_map: BTreeMap::from([("claude-default".into(), "claude-sonnet-4-5".into())]),
+        egress_proxies: Vec::new(),
         compatible_auth_header: None,
         compatible_auth_prefix: None,
     }

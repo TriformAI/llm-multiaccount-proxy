@@ -27,6 +27,8 @@ pub struct ProviderAccount {
     pub enabled: bool,
     #[serde(default)]
     pub model_map: BTreeMap<String, String>,
+    #[serde(default)]
+    pub egress_proxies: Vec<String>,
     pub compatible_auth_header: Option<String>,
     pub compatible_auth_prefix: Option<String>,
 }
@@ -52,6 +54,10 @@ impl PreparedProviderRequest {
         self.headers
             .get(&name.to_ascii_lowercase())
             .map(|value| value.as_str())
+    }
+
+    pub(crate) fn into_headers(self) -> BTreeMap<String, Zeroizing<String>> {
+        self.headers
     }
 }
 
