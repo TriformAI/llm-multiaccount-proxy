@@ -93,7 +93,7 @@ async fn branded_admin_session_can_create_a_redacted_routable_account() {
     ));
     let app = application_router(
         data_plane,
-        store,
+        store.clone(),
         sessions,
         AdminRuntimeConfig {
             auth_mode: AuthMode::Enforce,
@@ -169,6 +169,26 @@ async fn branded_admin_session_can_create_a_redacted_routable_account() {
         .unwrap();
     assert_eq!(create.status(), StatusCode::CREATED);
 
+    let rotate = app
+        .clone()
+        .oneshot(
+            Request::put("/admin/api/v1/accounts/primary/credential")
+                .header("content-type", "application/json")
+                .header("cookie", &cookie)
+                .header("x-llmap-csrf", csrf)
+                .body(Body::from(r#"{"credential":"fake-rotated-token"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rotate.status(), StatusCode::NO_CONTENT);
+    let (rotated_account, rotated_credential) = store.load_account("primary").unwrap();
+    assert_eq!(rotated_credential.expose(), "fake-rotated-token");
+    assert_eq!(
+        rotated_account.egress_proxies,
+        vec!["socks5h://fake-user:fake-pass@residential.invalid:1080"]
+    );
+
     let list = app
         .oneshot(
             Request::get("/admin/api/v1/accounts")
@@ -184,6 +204,7 @@ async fn branded_admin_session_can_create_a_redacted_routable_account() {
     assert!(text.contains("Primary Claude"));
     assert!(text.contains("socks5h://residential.invalid:1080"));
     assert!(!text.contains("fake-provider-token"));
+    assert!(!text.contains("fake-rotated-token"));
     assert!(!text.contains("fake-pass"));
 
     // Use the imported timestamp to keep the contract fixed to an async runtime.

@@ -126,6 +126,8 @@ fn dashboard_exposes_account_provider_proxy_and_auth_controls() {
     assert!(page.contains("Anthropic-compatible"));
     assert!(page.contains("SOCKS5h"));
     assert!(page.contains("Authentication mode"));
+    assert!(page.contains("Rotate credential"));
+    assert!(page.contains("Remove"));
     assert!(page.contains("observe"));
     assert!(page.contains("enforce"));
     assert!(page.contains("aria-live"));

@@ -22,6 +22,8 @@ obtained. A `502` is not permission to replay a non-idempotent request.
   status.
 - `GET|POST /admin/api/v1/accounts` lists redacted accounts or creates one.
 - `PUT /admin/api/v1/accounts/{id}/enabled` pauses or resumes immediately.
+- `PUT /admin/api/v1/accounts/{id}/credential` replaces a write-only provider
+  credential while preserving account and encrypted egress configuration.
 - `DELETE /admin/api/v1/accounts/{id}` revokes and removes an account.
 - `GET /admin/api/v1/audit` returns the latest 200 metadata events.
 - `POST /admin/api/v1/logout` invalidates the session.

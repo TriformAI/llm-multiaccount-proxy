@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, HeaderValue, Request, StatusCode, header};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{any, delete, get, post, put};
@@ -76,6 +76,10 @@ pub fn application_router(
             "/admin/api/v1/accounts/{account_id}/enabled",
             put(admin_set_account_enabled_api),
         )
+        .route(
+            "/admin/api/v1/accounts/{account_id}/credential",
+            put(admin_rotate_account_credential_api),
+        )
         .route("/admin/api/v1/audit", get(admin_audit_api))
         .with_state(admin_state);
     router(data_plane).merge(admin)
@@ -133,18 +137,17 @@ struct LoginInput {
 }
 
 async fn admin_login_api(
+    peer: Option<ConnectInfo<std::net::SocketAddr>>,
     State(state): State<AdminState>,
-    headers: HeaderMap,
     Json(input): Json<LoginInput>,
 ) -> Response {
-    let client_key = headers
-        .get(header::USER_AGENT)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("admin-client");
+    let client_key = peer
+        .map(|ConnectInfo(address)| address.ip().to_string())
+        .unwrap_or_else(|| "direct-router-test".into());
     let password = SecretInput::new(input.password);
     match state
         .sessions
-        .login(&input.username, &password, client_key, Utc::now())
+        .login(&input.username, &password, &client_key, Utc::now())
     {
         Ok(grant) => {
             let mut response = Json(json!({"status": "ok"})).into_response();
@@ -184,12 +187,16 @@ async fn admin_logout_api(State(state): State<AdminState>, headers: HeaderMap) -
     };
     state.sessions.logout(&session);
     let mut response = StatusCode::NO_CONTENT.into_response();
-    response.headers_mut().insert(
-        header::SET_COOKIE,
-        HeaderValue::from_static(
-            "llmap_admin_session=; Path=/admin; Max-Age=0; HttpOnly; SameSite=Strict",
-        ),
-    );
+    let secure = if state.runtime.secure_cookies {
+        "; Secure"
+    } else {
+        ""
+    };
+    if let Ok(cookie) = HeaderValue::from_str(&format!(
+        "llmap_admin_session=; Path=/admin; Max-Age=0; HttpOnly; SameSite=Strict{secure}"
+    )) {
+        response.headers_mut().insert(header::SET_COOKIE, cookie);
+    }
     response
 }
 
@@ -301,6 +308,60 @@ async fn admin_create_account_api(
 #[derive(Deserialize)]
 struct EnabledInput {
     enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct CredentialInput {
+    credential: String,
+}
+
+async fn admin_rotate_account_credential_api(
+    State(state): State<AdminState>,
+    Path(account_id): Path<String>,
+    headers: HeaderMap,
+    Json(input): Json<CredentialInput>,
+) -> Response {
+    if let Err(response) = authenticated_session(&state, &headers, true) {
+        return response;
+    }
+    if input.credential.is_empty() || input.credential.len() > 32 * 1024 {
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_credential",
+            "Credential must be present and no larger than 32 KiB.",
+            "Paste the complete provider credential or OAuth envelope and retry.",
+        );
+    }
+    let (account, _) = match state.store.load_account(&account_id) {
+        Ok(account) => account,
+        Err(error) => return storage_error(error),
+    };
+    let credential = SecretInput::new(input.credential);
+    let result = if account.kind == ProviderKind::ClaudeOauth {
+        state.store.rotate_account_credential(
+            &account,
+            &credential,
+            Utc::now() + chrono::Duration::minutes(10),
+        )
+    } else {
+        state.store.upsert_account(&account, &credential)
+    };
+    if let Err(error) = result {
+        return storage_error(error);
+    }
+    let _ = state.store.append_audit(&AuditEvent {
+        occurred_at: Utc::now(),
+        actor: "admin".into(),
+        action: "account.credential.rotate".into(),
+        account_id: Some(account_id),
+        provider: Some(provider_name(&account.kind)),
+        model: None,
+        session_id: None,
+        status: Some(StatusCode::NO_CONTENT.as_u16()),
+        outcome: "success".into(),
+        latency_ms: None,
+    });
+    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn admin_set_account_enabled_api(

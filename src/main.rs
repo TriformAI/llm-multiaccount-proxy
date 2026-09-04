@@ -231,10 +231,13 @@ async fn serve(config_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(&config.server.bind).await?;
     info!(bind = %config.server.bind, auth_mode = ?config.auth.mode, "llmap is ready");
     let reverse = async move {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
-            .await
-            .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .map_err(|error| -> Box<dyn std::error::Error> { Box::new(error) })
     };
     if config.forward_proxy.enabled {
         let handler = ForwardProxyHandler::new(

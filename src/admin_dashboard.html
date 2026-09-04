@@ -54,6 +54,8 @@
     .meta { margin-top: 1.6rem; display: grid; gap: .55rem; color: var(--muted); font: .72rem ui-monospace,monospace; }
     .meta div { display: flex; justify-content: space-between; gap: 1rem; }
     .meta strong { max-width: 68%; color: var(--text); overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+    .account-actions { display: flex; flex-wrap: wrap; gap: .55rem; margin-top: 1.2rem; }
+    button.danger { color: var(--bad); }
     .empty { grid-column: 1/-1; padding: 3rem; border: 1px dashed var(--line); border-radius: .9rem; color: var(--muted); text-align: center; }
     dialog { width: min(42rem,calc(100% - 2rem)); max-height: calc(100vh - 2rem); padding: 0; color: var(--text); background: var(--raised); border: 1px solid var(--line); border-radius: 1rem; box-shadow: 0 2rem 7rem rgba(0,0,0,.62); }
     dialog::backdrop { background: rgba(3,4,7,.76); backdrop-filter: blur(5px); }
@@ -127,6 +129,15 @@
       </div>
     </form>
   </dialog>
+  <dialog id="credential-dialog" aria-labelledby="credential-dialog-title">
+    <form id="credential-form" method="dialog">
+      <div class="dialog-head"><strong id="credential-dialog-title">Rotate credential</strong><button type="button" id="close-credential-dialog" aria-label="Close">Close</button></div>
+      <div class="dialog-body">
+        <label>New provider credential<input name="credential" type="password" autocomplete="new-password" required><span class="helper">Write-only. OAuth access-token overlap is limited to ten minutes; other provider credentials switch immediately.</span></label>
+        <div class="dialog-actions"><button type="button" id="cancel-credential">Cancel</button><button class="primary" type="submit">Rotate credential</button></div>
+      </div>
+    </form>
+  </dialog>
   <script>
     let csrf = '';
     const list = document.getElementById('account-list');
@@ -140,7 +151,8 @@
     }
     function card(account) {
       const egress = account.egress.length ? account.egress.join(' → ') : 'direct';
-      return `<article class="account"><div class="account-top"><div><h3>${escapeHtml(account.label)}</h3><div class="provider">${escapeHtml(account.provider.replaceAll('_',' '))}</div></div><span class="badge">${account.enabled?'active':'paused'}</span></div><div class="meta"><div><span>BASE</span><strong>${escapeHtml(account.base_url)}</strong></div><div><span>EGRESS</span><strong>${escapeHtml(egress)}</strong></div><div><span>MODELS</span><strong>${account.models.length}</strong></div></div><button data-toggle="${escapeHtml(account.id)}" data-enabled="${account.enabled}">${account.enabled?'Pause':'Resume'}</button></article>`;
+      const id = escapeHtml(account.id);
+      return `<article class="account"><div class="account-top"><div><h3>${escapeHtml(account.label)}</h3><div class="provider">${escapeHtml(account.provider.replaceAll('_',' '))}</div></div><span class="badge">${account.enabled?'active':'paused'}</span></div><div class="meta"><div><span>BASE</span><strong>${escapeHtml(account.base_url)}</strong></div><div><span>EGRESS</span><strong>${escapeHtml(egress)}</strong></div><div><span>MODELS</span><strong>${account.models.length}</strong></div></div><div class="account-actions"><button data-toggle="${id}" data-enabled="${account.enabled}">${account.enabled?'Pause':'Resume'}</button><button data-rotate="${id}" data-label="${escapeHtml(account.label)}">Rotate credential</button><button class="danger" data-delete="${id}" data-label="${escapeHtml(account.label)}">Remove</button></div></article>`;
     }
     async function load() {
       try {
@@ -151,18 +163,28 @@
         list.innerHTML = accounts.length ? accounts.map(card).join('') : '<div class="empty">No accounts yet. Add one to open the routing pool.</div>';
         document.getElementById('active-count').textContent = accounts.filter(a=>a.enabled).length;
         list.querySelectorAll('[data-toggle]').forEach(button => button.addEventListener('click', async () => { await api(`/accounts/${encodeURIComponent(button.dataset.toggle)}/enabled`, {method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({enabled:button.dataset.enabled!=='true'})}); await load(); }));
+        list.querySelectorAll('[data-rotate]').forEach(button => button.addEventListener('click', () => { rotatingAccount = button.dataset.rotate; document.getElementById('credential-dialog-title').textContent = `Rotate · ${button.dataset.label}`; credentialDialog.showModal(); }));
+        list.querySelectorAll('[data-delete]').forEach(button => button.addEventListener('click', async () => { if (!confirm(`Remove ${button.dataset.label}? Active clients using its token will lose access immediately.`)) return; try { await api(`/accounts/${encodeURIComponent(button.dataset.delete)}`, {method:'DELETE'}); notice.textContent='Account removed.'; await load(); } catch(error) { notice.textContent=error.message; } }));
       } catch (error) { notice.textContent = error.message; }
     }
     const dialog = document.getElementById('account-dialog');
+    const credentialDialog = document.getElementById('credential-dialog');
+    let rotatingAccount = '';
     document.getElementById('add-account').addEventListener('click',()=>dialog.showModal());
     document.getElementById('close-dialog').addEventListener('click',()=>dialog.close());
     document.getElementById('cancel').addEventListener('click',()=>dialog.close());
+    document.getElementById('close-credential-dialog').addEventListener('click',()=>credentialDialog.close());
+    document.getElementById('cancel-credential').addEventListener('click',()=>credentialDialog.close());
     document.getElementById('refresh').addEventListener('click',load);
     document.getElementById('account-form').addEventListener('submit', async event => {
       event.preventDefault(); const data = Object.fromEntries(new FormData(event.target));
       data.id = crypto.randomUUID(); data.enabled = true; data.model_map = {};
       data.egress_proxies = data.egress_proxies.split('\n').map(v=>v.trim()).filter(Boolean);
       try { await api('/accounts',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(data)}); event.target.reset(); dialog.close(); notice.textContent='Account saved.'; await load(); } catch(error) { notice.textContent=error.message; }
+    });
+    document.getElementById('credential-form').addEventListener('submit', async event => {
+      event.preventDefault(); const data = Object.fromEntries(new FormData(event.target));
+      try { await api(`/accounts/${encodeURIComponent(rotatingAccount)}/credential`,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(data)}); event.target.reset(); credentialDialog.close(); notice.textContent='Credential rotated.'; await load(); } catch(error) { notice.textContent=error.message; }
     });
     load();
   </script>
